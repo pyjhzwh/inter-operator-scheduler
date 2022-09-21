@@ -88,6 +88,13 @@ bool operator<(const ConvKey &lhs, const ConvKey &rhs) {
     return false;
 }
 
+cudnnTensorFormat_t getCudNNLayoutFromStr(string str) {
+    if(str == "NCHW")
+        return CUDNN_TENSOR_NCHW;
+    assert(str == "NHWC");
+    return CUDNN_TENSOR_NHWC;
+}
+
 struct ConvAlgMap {
     const char * config_filename = "conv2alg.txt";
     map<ConvKey, cudnnConvolutionFwdAlgo_t> conv2alg;
@@ -571,6 +578,69 @@ struct PoolOP {
         checkCUDA(cudaFree(output_data));
     }
 
+};
+
+
+struct TransformOp {
+    cudnnTensorDescriptor_t srcTensor, dstTensor;
+    cudnnTensorFormat_t src_layout, dst_layout;
+
+    data_type *input_data;
+    data_type *output_data;
+
+    int N, C, H, W;
+
+    CudnnContext *context;
+    bool needTransform;
+
+    void init(int batch_size, int in_channels,
+            int input_h, int input_w,
+            string _src_layout,
+            string _dst_layout) {
+        this->N = batch_size;
+        this->C = in_channels;
+        this->H = input_h;
+        this->W = input_w;
+        this->src_layout = getCudNNLayoutFromStr(_src_layout);
+        this->dst_layout = getCudNNLayoutFromStr(_dst_layout);
+        if(_src_layout == _dst_layout)
+            needTransform = false;
+        else
+            needTransform = true;
+    }
+
+    void map(data_type *input_data, CudnnContext *context) {
+        this->input_data = input_data;
+        this->context = context;
+        checkCUDNN(cudnnCreateTensorDescriptor(&srcTensor));
+        checkCUDNN(cudnnCreateTensorDescriptor(&dstTensor));
+
+        // set descriptors
+        checkCUDNN(cudnnSetTensor4dDescriptor(srcTensor, src_layout,
+            cudnn_data_type, N, C, H, W));
+        checkCUDNN(cudnnSetTensor4dDescriptor(dstTensor, dst_layout,
+            cudnn_data_type, N, C, H, W));
+
+        // allocate tensors
+        size_t output_size = sizeof(data_type) * N * C * H * W;
+        checkCUDA(cudaMalloc(&output_data, output_size));
+    }
+
+    void forward() {
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+        checkCUDNN(cudnnTransformTensor(
+            context->dnn, &alpha, srcTensor, input_data,
+            &beta, dstTensor, output_data));
+
+    }
+
+    void unmap() {
+        checkCUDNN(cudnnDestroyTensorDescriptor(srcTensor));
+        checkCUDNN(cudnnDestroyTensorDescriptor(dstTensor));
+        // free tensors
+        checkCUDA(cudaFree(output_data));
+    }
 };
 
 
@@ -1085,6 +1155,40 @@ struct Pool: NodeBase {
     void unmap() override {
         input.unmap();
         pool_op.unmap();
+    }
+};
+
+struct Transform: NodeBase {
+    Input input;
+    TransformOp transform_op;
+
+    void init(const Json::Value &config, const std::map<string,NodeBase*> &node_map) {
+        this->name = config["name"].asString();
+        this->input.init(config["inputs"], node_map);
+        transform_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                         config["src_layout"].asString(),
+                         config["dst_layout"].asString());
+        this->batch_size = input.batch_size;
+        this->out_channels =  input.out_channels;
+        this->output_h =  input.output_h;
+        this->output_w = input.output_w;
+        this->context = context;
+        this->output_data = nullptr;
+    }
+
+    void map() override {
+        input.set_context(context);
+        input.map();
+        transform_op.map(input.output_data, context);
+        this->output_data = input.output_data;
+    }
+    void forward() override {
+        input.forward();
+        transform_op.forward();
+    }
+    void unmap() override {
+        input.unmap();
+        transform_op.unmap();
     }
 };
 
