@@ -56,6 +56,45 @@ using std::string;
 using std::size_t;
 
 
+bool is_NCHW_layout(int* shape, int* stride)
+{
+    int cnt = 1;
+    int expect_stride = 1;
+    for (int i= 3; i >=0; i--){
+        expect_stride = cnt;
+        cnt *= shape[i];
+        if (expect_stride != stride[i])
+            return false;
+    }
+    return true;
+}
+
+bool is_NHWC_layout(int* shape, int* stride)
+{
+    int NHWC_stride_order[4] = {0, 2, 3, 1};
+    int cnt = 1;
+    int expect_stride = 1;
+    for(int i= 3; i >=0; i--){
+        expect_stride = cnt;
+        cnt *= shape[NHWC_stride_order[i]];
+        if(expect_stride != stride[NHWC_stride_order[i]])
+            return false;
+    }
+    return true;
+}
+
+// string infer_layout(int N, int C, int H, int W, int* stride)
+// {
+//     int shape[4] = {N, C, H, W};
+//     if(is_NCHW_layout(shape, stride))
+//         return "NCHW";
+//     else {
+//         assert(is_NHWC_layout(shape, stride));
+//         return "NHWC";
+//     }
+// }
+
+
 struct ConvKey {
     int attrs[12];
     ConvKey() {}
@@ -589,18 +628,24 @@ struct TransformOp {
     data_type *output_data;
 
     int N, C, H, W;
+    int stride[4];
 
     CudnnContext *context;
     bool needTransform;
 
     void init(int batch_size, int in_channels,
             int input_h, int input_w,
+            int* input_stride,
             string _src_layout,
             string _dst_layout) {
         this->N = batch_size;
         this->C = in_channels;
         this->H = input_h;
         this->W = input_w;
+        for(int i=0; i < 4; i++) {
+            this->stride[i] = input_stride[i];
+        }
+        // assert(infer_layout(N, C, H, W, input_stride) == _src_layout);
         this->src_layout = getCudNNLayoutFromStr(_src_layout);
         this->dst_layout = getCudNNLayoutFromStr(_dst_layout);
         if(_src_layout == _dst_layout)
@@ -660,6 +705,7 @@ struct NodeBase {
     int output_h;
     int output_w;
     int stride[4];
+    string layout;
     data_type *output_data;
     void print_shape() {
         fprintf(stderr, "%s %d %d %d %d\n", name.c_str(), batch_size, out_channels, output_h, output_w);
@@ -671,12 +717,26 @@ struct NodeBase {
         this->context = context_;
     }
     // init stride (assume default NCHW layout)
-    void init_stride() {
-        int cnt = 1;
-        for (int i= 4-1; i >= 0; i--)
-        {
-            this->stride[i] = cnt;
-            cnt ++;
+    void init_stride(string layout) {
+        this->layout = layout;
+        int shape[4] = {batch_size, out_channels, output_h, output_w};
+        if(this->layout == "NCHW") {
+            int cnt = 1;
+            for (int i= 4-1; i >= 0; i--)
+            {
+                this->stride[i] = cnt;
+                cnt *= shape[i];
+            }
+        }
+        else {
+            assert(this->layout == "NHWC");
+            int NHWC_stride_order[4] = {0, 2, 3, 1};
+            int cnt = 1;
+            for (int i= 4-1; i >= 0; i--)
+            {
+                this->stride[NHWC_stride_order[i]] = cnt;
+                cnt *= shape[NHWC_stride_order[i]];
+            }
         }
     }
     virtual void map() = 0;
@@ -686,14 +746,14 @@ struct NodeBase {
 
 
 struct Placeholder: NodeBase {
-    void init(string name, int batch_size, int out_channels, int output_h, int output_w) {
+    void init(string name, int batch_size, int out_channels, int output_h, int output_w, string layout) {
         this->name = name;
         this->batch_size = batch_size;
         this->out_channels = out_channels;
         this->output_h = output_h;
         this->output_w = output_w;
         this->output_data = nullptr;
-        this->init_stride();
+        this->init_stride(layout);
     }
     void init(int batch_size, const Json::Value &value_config) {
         // this->name = value_config["name"].asString();
@@ -707,7 +767,8 @@ struct Placeholder: NodeBase {
             batch_size,
             (int)value_config["output_shape"][0].asInt(),
             (int)value_config["output_shape"][1].asInt(),
-            (int)value_config["output_shape"][2].asInt()
+            (int)value_config["output_shape"][2].asInt(),
+            (string)value_config["layout"].asString()
         );
     }
     void map() override {
@@ -735,7 +796,7 @@ struct Value: NodeBase {
         this->output_w = node->output_w;
         this->context = nullptr;
         this->output_data = nullptr;
-        this->init_stride();
+        this->init_stride(this->node->layout);
     }
     void map() override {
         if(batch_size == 1) {
@@ -797,7 +858,7 @@ struct Term: NodeBase {
         }
         this->context = nullptr;
         this->output_data = nullptr;
-        this->init_stride();
+        this->init_stride(values[0].layout);
     }
     void map() override {
         for(int i = 0; i < num_values; i++) {
@@ -874,7 +935,7 @@ struct Input: NodeBase {
         this->output_w = terms[0].output_w;
         this->output_data = nullptr;
         this->context = nullptr;
-        this->init_stride();
+        this->init_stride(terms[0].layout);
     }
     void map() override {
         for(int i = 0; i < num_terms; i++) {
@@ -937,7 +998,7 @@ struct Conv: NodeBase {
         this->output_w = conv_op.output_w;
         this->context = nullptr;
         this->output_data = nullptr;
-        this->init_stride();
+        this->init_stride(conv_config["layout"].asString());
     }
     void map() override {
         input.set_context(context);
@@ -992,7 +1053,7 @@ struct Element: NodeBase {
         this->out_channels = inputs[0].out_channels;
         this->output_h = inputs[0].output_h;
         this->output_w = inputs[0].output_w;
-        this->init_stride();
+        this->init_stride(elem_config["layout"].asString());
     }
     void map() override {
         inputs[0].map();
@@ -1066,7 +1127,7 @@ struct Activation: NodeBase {
         this->output_w = act.output_w;
         this->output_data = nullptr;
         this->context = nullptr;
-        this->init_stride();
+        this->init_stride(config["layout"].asString());
     }
     void map() {
         input.set_context(context);
@@ -1098,7 +1159,7 @@ struct Relu: NodeBase {
         this->output_w = act_relu.output_w;
         this->output_data = nullptr;
         this->context = nullptr;
-        this->init_stride();
+        this->init_stride(config["layout"].asString());
     }
     void map() {
         input.set_context(context);
@@ -1127,7 +1188,7 @@ struct Identity: NodeBase {
         this->out_channels = input.out_channels;
         this->output_h = input.output_h;
         this->output_w = input.output_w;
-        this->init_stride();
+        this->init_stride(config["layout"].asString());
     }
     void map() override {
         input.set_context(context);
@@ -1178,7 +1239,7 @@ struct Pool: NodeBase {
         this->out_channels = pool_op.out_channels;
         this->output_h = pool_op.output_h;
         this->output_w = pool_op.output_w;
-        this->init_stride();
+        this->init_stride(config["layout"].asString());
     }
     void map() override {
         input.set_context(context);
@@ -1205,6 +1266,7 @@ struct Transform: NodeBase {
         this->name = config["name"].asString();
         this->input.init(config["inputs"], node_map);
         transform_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                         input.stride,
                          config["src_layout"].asString(),
                          config["dst_layout"].asString());
         this->batch_size = input.batch_size;
@@ -1213,7 +1275,7 @@ struct Transform: NodeBase {
         this->output_w = input.output_w;
         this->context = context;
         this->output_data = nullptr;
-        this->init_stride();
+        this->init_stride(config["layout"].asString());
     }
 
     void map() override {
@@ -1337,7 +1399,14 @@ struct Graph {
         Json::Value enter_node = block_config["enter_node"];
         Json::Value input_shape = enter_node["output_shape"];
         num_inputs = 1;
-        inputs[0].init(enter_node["name"].asString(), batch_size, input_shape[0].asInt(), input_shape[1].asInt(), input_shape[2].asInt());
+        inputs[0].init(
+            enter_node["name"].asString(),
+            batch_size,
+            input_shape[0].asInt(),
+            input_shape[1].asInt(),
+            input_shape[2].asInt(),
+            enter_node["layout"].asString()
+        );
         node_map[enter_node["name"].asString()] = &inputs[0];
 
         NodeBase *nb;
@@ -1370,7 +1439,9 @@ struct Graph {
             int out_channels = (*it)[0].asInt();
             int output_h = (*it)[1].asInt();
             int outupt_w = (*it)[2].asInt();
-            inputs[num_inputs].init(name, batch_size, out_channels, output_h, outupt_w);
+            // TODO: where is layout??
+            string layout = (*it)[3].asString();
+            inputs[num_inputs].init(name, batch_size, out_channels, output_h, outupt_w, layout);
             inputs[num_inputs].set_context(contexts + 0);
             node_map[name] = inputs + num_inputs;
             num_inputs++;

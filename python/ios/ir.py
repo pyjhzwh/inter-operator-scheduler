@@ -104,15 +104,17 @@ class Node:
     output_shape: None or Tuple[int, int, int]
         The output shape of the operator. It can be None because this can be inferred by the input shapes.
     """
-    __slots__ = ['type', 'name', 'hint_name', 'inputs', 'output_shape', 'uses']
+    __slots__ = ['type', 'name', 'hint_name', 'inputs', 'output_shape', 'uses', 'layout']
 
-    def __init__(self, type, name, hint_name, inputs, output_shape):
+    def __init__(self, type, name, hint_name, inputs, output_shape, layout="NCHW"):
         self.type = type
         self.name = name
         self.hint_name = hint_name
         self.output_shape: Tuple[int, int, int] = output_shape
         self.inputs: Sequence[Sequence[Value]] = inputs
         self.uses: List[Tuple[Node, int, int]] = []
+        # output layout "NCHW" or "NHWC"
+        self.layout: str = layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -248,19 +250,25 @@ class Placeholder(Node):
     """
     The placeholder that represents the input of the computation graph.
     """
-    def __init__(self, name, hint_name, output_shape):
-        super().__init__("placeholder", name, hint_name, [[]], output_shape)
+    def __init__(self, name, hint_name, output_shape, layout="NCHW"):
+        super().__init__("placeholder", name, hint_name, [[]], output_shape, layout)
 
     @staticmethod
     def from_config(config, name2node):
-        return Placeholder(config['name'], config['hint_name'], output_shape=config['output_shape'])
+        return Placeholder(
+            config['name'],
+            config['hint_name'],
+            output_shape=config['output_shape'],
+            layout=config['layout'],
+        )
 
     def export_config(self):
         return {
             'type': 'placeholder',
             'name': self.name,
             'hint_name': self.hint_name,
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     def flops(self):
@@ -305,8 +313,8 @@ class Conv(Node):
     """
     __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias']
 
-    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape):
-        super().__init__("conv", name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW"):
+        super().__init__("conv", name, hint_name, inputs, output_shape, layout)
         self.kernel = kernel
         self.stride = stride
         self.padding = padding
@@ -335,7 +343,8 @@ class Conv(Node):
             padding=config['padding'],
             groups=config['groups'],
             act=config['act'],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -355,7 +364,8 @@ class Conv(Node):
             'padding': self.padding,
             'groups': self.groups,
             'act': self.act,
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
         return config
 
@@ -409,8 +419,8 @@ class Sequential(Node):
     """
     __slots__ = ['nodes']
 
-    def __init__(self, name, hint_name, nodes: List[Node], output_shape):
-        super().__init__('sequential', name, hint_name, nodes[0].inputs, output_shape)
+    def __init__(self, name, hint_name, nodes: List[Node], output_shape, layout="NCHW"):
+        super().__init__('sequential', name, hint_name, nodes[0].inputs, output_shape, layout)
         self.nodes = nodes
 
     @staticmethod
@@ -424,7 +434,8 @@ class Sequential(Node):
             name=config['name'],
             hint_name=config['hint_name'],
             nodes=nodes,
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -437,7 +448,8 @@ class Sequential(Node):
             'name': self.name,
             'hint_name': self.hint_name,
             'nodes': [nd.export_config() for nd in self.nodes],
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     def infer_shape(self):
@@ -487,8 +499,8 @@ class Pool(Node):
     #       max, avg, global_max, global_avg
     #
 
-    def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape):
-        super().__init__('pool', name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape, layout="NCHW"):
+        super().__init__('pool', name, hint_name, inputs, output_shape, layout)
         self.name = name
         self.pool_type = pool_type
         self.kernel = kernel
@@ -506,7 +518,8 @@ class Pool(Node):
             kernel=config['kernel'],
             stride=config['stride'],
             padding=config['padding'],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -523,7 +536,8 @@ class Pool(Node):
             'kernel': self.kernel,
             'stride': self.stride,
             'padding': self.padding,
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     @property
@@ -578,8 +592,8 @@ class Element(Node):
     """
     __slots__ = ['op_type']
 
-    def __init__(self, name, hint_name, inputs, op_type, output_shape):
-        super().__init__("element", name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, op_type, output_shape, layout="NCHW"):
+        super().__init__("element", name, hint_name, inputs, output_shape, layout)
         self.op_type: str = op_type
 
     @staticmethod
@@ -590,7 +604,8 @@ class Element(Node):
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config]
                     for term_config in config['inputs']],
             op_type=config['op_type'],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -604,7 +619,8 @@ class Element(Node):
             'hint_name': self.hint_name,
             'inputs': [[value.export_config() for value in term] for term in self.inputs],
             'op_type': self.op_type,
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     @property
@@ -635,8 +651,8 @@ class Identity(Node):
     """
     Identity operator. It can also works as the Concat operator when there are multiple terms in the inputs.
     """
-    def __init__(self, name, hint_name, inputs, output_shape):
-        super().__init__("identity", name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, output_shape, layout="NCHW"):
+        super().__init__("identity", name, hint_name, inputs, output_shape, layout)
 
     @staticmethod
     def from_config(config, name2node):
@@ -645,7 +661,8 @@ class Identity(Node):
             hint_name=config['hint_name'],
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
                     config['inputs']],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -658,7 +675,8 @@ class Identity(Node):
             'name': self.name,
             'hint_name': self.hint_name,
             'inputs': [[value.export_config() for value in term] for term in self.inputs],
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     @property
@@ -697,8 +715,8 @@ class Activation(Node):
     """
     __slots__ = ['act_type', 'inplace']
 
-    def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape):
-        super().__init__('activation', name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape, layout="NCHW"):
+        super().__init__('activation', name, hint_name, inputs, output_shape, layout)
         self.act_type = act_type
         self.inplace = inplace
 
@@ -711,7 +729,8 @@ class Activation(Node):
                     for term_config in config['inputs']],
             act_type=config['act_type'],
             inplace=config['inplace'],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -726,7 +745,8 @@ class Activation(Node):
             'inputs': [[value.export_config() for value in term] for term in self.inputs],
             'act_type': self.act_type,
             'inplace': self.inplace,
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     @property
@@ -753,8 +773,8 @@ class Relu(Node):
     """
     Relu activation operator. It is equivalent to Activation(act_type='relu').
     """
-    def __init__(self, name, hint_name, inputs, output_shape):
-        super().__init__('relu', name, hint_name, inputs, output_shape)
+    def __init__(self, name, hint_name, inputs, output_shape, layout="NCHW"):
+        super().__init__('relu', name, hint_name, inputs, output_shape, layout)
 
     @staticmethod
     def from_config(config, name2node):
@@ -763,7 +783,8 @@ class Relu(Node):
             hint_name=config['hint_name'],
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
                     config['inputs']],
-            output_shape=config['output_shape']
+            output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -776,7 +797,8 @@ class Relu(Node):
             'name': self.name,
             'hint_name': self.hint_name,
             'inputs': [[value.export_config() for value in term] for term in self.inputs],
-            'output_shape': self.output_shape
+            'output_shape': self.output_shape,
+            'layout': self.layout,
         }
 
     @property
@@ -806,7 +828,7 @@ class Transform(Node):
     def __init__(
         self, name, hint_name, inputs, src_layout, dst_layout, output_shape
     ):
-        super().__init__("transform", name, hint_name, inputs, output_shape)
+        super().__init__("transform", name, hint_name, inputs, output_shape, dst_layout)
         self.src_layout = src_layout
         self.dst_layout = dst_layout
         self.need_transform = (src_layout != dst_layout)
@@ -821,6 +843,7 @@ class Transform(Node):
             src_layout=config["src_layout"],
             dst_layout=config["dst_layout"],
             output_shape=config['output_shape'],
+            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -837,6 +860,7 @@ class Transform(Node):
             'src_layout': self.src_layout,
             'dst_layout': self.dst_layout,
             'output_shape': self.output_shape,
+            'layout': self.layout,
         }
         return config
 

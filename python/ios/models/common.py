@@ -26,6 +26,22 @@ def reset_name():
     global name_index
     name_index = 0
 
+def setup_op(op: Node, inputs: List[List[Value]], block: Block, is_exit=False):
+    """
+    Set up op in block
+    1. op.infer_shape()
+    2. set uses
+    3. set block
+    """
+    op.infer_shape()
+    for ti, term in enumerate(inputs):
+        for vi, value in enumerate(term):
+            value.node.uses.append((op, ti, vi))
+    if is_exit:
+        block.exit_node = op
+    else:
+        block.inner_nodes.append(op)
+
 
 def placeholder(output_shape):
     """
@@ -78,14 +94,15 @@ def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), pad
     """
     name = new_name()
     conv = Conv(name, name, inputs, out_channels, kernel, stride, padding, groups, act, None)
-    conv.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((conv, ti, vi))
-    if is_exit:
-        block.exit_node = conv
-    else:
-        block.inner_nodes.append(conv)
+    setup_op(conv, inputs, block, is_exit)
+    # conv.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((conv, ti, vi))
+    # if is_exit:
+    #     block.exit_node = conv
+    # else:
+    #     block.inner_nodes.append(conv)
     return Value(conv, 0, out_channels)
 
 
@@ -136,14 +153,15 @@ def identity(block: Block, inputs, is_exit=False):
     """
     name = new_name()
     ident = Identity(name, name, inputs, None)
-    ident.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((ident, ti, vi))
-    if is_exit:
-        block.exit_node = ident
-    else:
-        block.inner_nodes.append(ident)
+    setup_op(ident, inputs, block, is_exit)
+    # ident.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((ident, ti, vi))
+    # if is_exit:
+    #     block.exit_node = ident
+    # else:
+    #     block.inner_nodes.append(ident)
     return Value(ident, 0, ident.output_shape[0])
 
 
@@ -166,14 +184,15 @@ def relu(block: Block, inputs, is_exit=False):
     """
     name = new_name()
     rel = Relu(name, name, inputs, None)
-    rel.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((rel, ti, vi))
-    if is_exit:
-        block.exit_node = rel
-    else:
-        block.inner_nodes.append(rel)
+    setup_op(rel, inputs, block, is_exit)
+    # rel.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((rel, ti, vi))
+    # if is_exit:
+    #     block.exit_node = rel
+    # else:
+    #     block.inner_nodes.append(rel)
     return Value(rel, 0, rel.output_shape[0])
 
 
@@ -202,14 +221,15 @@ def activation(block: Block, inputs, act_type, inplace, is_exit=False):
     """
     name = new_name()
     rel = Activation(name, name, inputs, act_type=act_type, inplace=inplace, output_shape=None)
-    rel.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((rel, ti, vi))
-    if is_exit:
-        block.exit_node = rel
-    else:
-        block.inner_nodes.append(rel)
+    setup_op(rel, inputs, block, is_exit)
+    # rel.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((rel, ti, vi))
+    # if is_exit:
+    #     block.exit_node = rel
+    # else:
+    #     block.inner_nodes.append(rel)
     return Value(rel, 0, rel.output_shape[0])
 
 
@@ -253,14 +273,15 @@ def element(block: Block, inputs, op_type, is_exit=False):
     """
     name = new_name()
     rel = Element(name, name, inputs, op_type=op_type, output_shape=None)
-    rel.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((rel, ti, vi))
-    if is_exit:
-        block.exit_node = rel
-    else:
-        block.inner_nodes.append(rel)
+    setup_op(rel, inputs, block, is_exit)
+    # rel.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((rel, ti, vi))
+    # if is_exit:
+    #     block.exit_node = rel
+    # else:
+    #     block.inner_nodes.append(rel)
     return Value(rel, 0, rel.output_shape[0])
 
 
@@ -313,14 +334,15 @@ def pool2d(block: Block, inputs, pool_type, kernel=(1, 1), stride=(1, 1), paddin
     """
     name = new_name()
     pool = Pool(name, name, inputs, pool_type, kernel, stride, padding, None)
-    pool.infer_shape()
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((pool, ti, vi))
-    if is_exit:
-        block.exit_node = pool
-    else:
-        block.inner_nodes.append(pool)
+    setup_op(pool, inputs, block, is_exit)
+    # pool.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((pool, ti, vi))
+    # if is_exit:
+    #     block.exit_node = pool
+    # else:
+    #     block.inner_nodes.append(pool)
     return Value(pool, 0, pool.output_shape[0])
 
 
@@ -517,14 +539,14 @@ def get_parts(block, split_vars: List[Value]):
 
 def transform(block: Block, inputs, src_layout, dst_layout, is_exit=False):
     name = new_name()
-    rel = Transform(name, name, inputs, src_layout, dst_layout, None)
-    rel.infer_shape()
-    print(rel.readable_lines(0))
-    for ti, term in enumerate(inputs):
-        for vi, value in enumerate(term):
-            value.node.uses.append((rel, ti, vi))
-    if is_exit:
-        block.exit_node = rel
-    else:
-        block.inner_nodes.append(rel)
-    return Value(rel, 0, rel.output_shape[0])
+    transform = Transform(name, name, inputs, src_layout, dst_layout, None)
+    setup_op(transform, inputs, block, is_exit)
+    # rel.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((rel, ti, vi))
+    # if is_exit:
+    #     block.exit_node = rel
+    # else:
+    #     block.inner_nodes.append(rel)
+    return Value(transform, 0, transform.output_shape[0])
