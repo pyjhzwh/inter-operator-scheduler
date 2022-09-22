@@ -612,6 +612,8 @@ struct TransformOp {
     void map(data_type *input_data, CudnnContext *context) {
         this->input_data = input_data;
         this->context = context;
+        if (! this->needTransform)
+            return;
         checkCUDNN(cudnnCreateTensorDescriptor(&srcTensor));
         checkCUDNN(cudnnCreateTensorDescriptor(&dstTensor));
 
@@ -627,6 +629,10 @@ struct TransformOp {
     }
 
     void forward() {
+        if (!this->needTransform) {
+            output_data = input_data;
+            return;
+        }
         const float alpha = 1.0f;
         const float beta = 0.0f;
         checkCUDNN(cudnnTransformTensor(
@@ -636,6 +642,8 @@ struct TransformOp {
     }
 
     void unmap() {
+        if (! this->needTransform)
+            return;
         checkCUDNN(cudnnDestroyTensorDescriptor(srcTensor));
         checkCUDNN(cudnnDestroyTensorDescriptor(dstTensor));
         // free tensors
@@ -651,12 +659,25 @@ struct NodeBase {
     int out_channels;
     int output_h;
     int output_w;
+    int stride[4];
     data_type *output_data;
     void print_shape() {
         fprintf(stderr, "%s %d %d %d %d\n", name.c_str(), batch_size, out_channels, output_h, output_w);
     }
+    void print_stride() {
+        fprintf(stderr, "%s %d %d %d %d\n", name.c_str(), stride[0], stride[1], stride[2], stride[3]);
+    }
     void set_context(CudnnContext *context_) {
         this->context = context_;
+    }
+    // init stride (assume default NCHW layout)
+    void init_stride() {
+        int cnt = 1;
+        for (int i= 4-1; i >= 0; i--)
+        {
+            this->stride[i] = cnt;
+            cnt ++;
+        }
     }
     virtual void map() = 0;
     virtual void forward() = 0;
@@ -671,14 +692,23 @@ struct Placeholder: NodeBase {
         this->out_channels = out_channels;
         this->output_h = output_h;
         this->output_w = output_w;
+        this->output_data = nullptr;
+        this->init_stride();
     }
     void init(int batch_size, const Json::Value &value_config) {
-        this->name = value_config["name"].asString();
-        this->batch_size = batch_size;
-        this->out_channels = value_config["output_shape"][0].asInt();
-        this->output_h = value_config["output_shape"][1].asInt();
-        this->output_w = value_config["output_shape"][2].asInt();
-        this->output_data = nullptr;
+        // this->name = value_config["name"].asString();
+        // this->batch_size = batch_size;
+        // this->out_channels = value_config["output_shape"][0].asInt();
+        // this->output_h = value_config["output_shape"][1].asInt();
+        // this->output_w = value_config["output_shape"][2].asInt();
+        // this->output_data = nullptr;
+        init(
+            (string)value_config["name"].asString(),
+            batch_size,
+            (int)value_config["output_shape"][0].asInt(),
+            (int)value_config["output_shape"][1].asInt(),
+            (int)value_config["output_shape"][2].asInt()
+        );
     }
     void map() override {
         size_t size = sizeof(data_type) * batch_size * out_channels * output_h * output_w;
@@ -705,6 +735,7 @@ struct Value: NodeBase {
         this->output_w = node->output_w;
         this->context = nullptr;
         this->output_data = nullptr;
+        this->init_stride();
     }
     void map() override {
         if(batch_size == 1) {
@@ -766,6 +797,7 @@ struct Term: NodeBase {
         }
         this->context = nullptr;
         this->output_data = nullptr;
+        this->init_stride();
     }
     void map() override {
         for(int i = 0; i < num_values; i++) {
@@ -842,6 +874,7 @@ struct Input: NodeBase {
         this->output_w = terms[0].output_w;
         this->output_data = nullptr;
         this->context = nullptr;
+        this->init_stride();
     }
     void map() override {
         for(int i = 0; i < num_terms; i++) {
@@ -904,6 +937,7 @@ struct Conv: NodeBase {
         this->output_w = conv_op.output_w;
         this->context = nullptr;
         this->output_data = nullptr;
+        this->init_stride();
     }
     void map() override {
         input.set_context(context);
@@ -958,6 +992,7 @@ struct Element: NodeBase {
         this->out_channels = inputs[0].out_channels;
         this->output_h = inputs[0].output_h;
         this->output_w = inputs[0].output_w;
+        this->init_stride();
     }
     void map() override {
         inputs[0].map();
@@ -1031,6 +1066,7 @@ struct Activation: NodeBase {
         this->output_w = act.output_w;
         this->output_data = nullptr;
         this->context = nullptr;
+        this->init_stride();
     }
     void map() {
         input.set_context(context);
@@ -1062,6 +1098,7 @@ struct Relu: NodeBase {
         this->output_w = act_relu.output_w;
         this->output_data = nullptr;
         this->context = nullptr;
+        this->init_stride();
     }
     void map() {
         input.set_context(context);
@@ -1090,6 +1127,7 @@ struct Identity: NodeBase {
         this->out_channels = input.out_channels;
         this->output_h = input.output_h;
         this->output_w = input.output_w;
+        this->init_stride();
     }
     void map() override {
         input.set_context(context);
@@ -1140,6 +1178,7 @@ struct Pool: NodeBase {
         this->out_channels = pool_op.out_channels;
         this->output_h = pool_op.output_h;
         this->output_w = pool_op.output_w;
+        this->init_stride();
     }
     void map() override {
         input.set_context(context);
@@ -1174,6 +1213,7 @@ struct Transform: NodeBase {
         this->output_w = input.output_w;
         this->context = context;
         this->output_data = nullptr;
+        this->init_stride();
     }
 
     void map() override {
@@ -1209,6 +1249,8 @@ struct Graph {
     Activation acts[MAX_NUM_NODES];
     int num_sequential;
     Sequential sequential[MAX_NUM_NODES];
+    int num_transform;
+    Transform transform[MAX_NUM_NODES];
 
     int num_stages;
     int stage_num_seq[MAX_NUM_NODES];
@@ -1216,7 +1258,7 @@ struct Graph {
     NodeBase* stages[MAX_NUM_NODES][MAX_NUM_GROUPS][MAX_GROUP_SIZE];
 
     void reset() {
-        num_inputs = num_convs = num_pools = num_idents = num_relus = num_elem = num_acts = num_sequential = num_stages = 0;
+        num_inputs = num_convs = num_pools = num_idents = num_relus = num_elem = num_acts = num_sequential = num_stages = num_transform = 0;
     }
 
     NodeBase *add_node(Json::Value node_config, std::map<string, NodeBase*> &node_map) {
@@ -1249,7 +1291,12 @@ struct Graph {
             assert(num_sequential < MAX_NUM_NODES);
             sequential[num_sequential].init(node_config, node_map, this);
             nb = sequential + num_sequential++;
-        } else {
+        } else if(node_config["type"].asString() == "transform") {
+            assert(num_transform < MAX_NUM_NODES);
+            transform[num_transform].init(node_config, node_map);
+            nb = transform + num_transform++;
+        }
+        else {
             FatalError("unsupported type " + node_config["type"].asString());
         }
         return nb;

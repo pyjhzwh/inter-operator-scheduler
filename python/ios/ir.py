@@ -140,6 +140,8 @@ class Node:
             return Activation.from_config(config, name2node)
         elif config['type'] == 'sequential':
             return Sequential.from_config(config, name2node)
+        elif config['type'] == 'transform':
+            return Transform.from_config(config, name2node)
         else:
             raise ValueError(f"unrecognized node type {config['type']}")
 
@@ -795,6 +797,73 @@ class Relu(Node):
 
     def readable_lines(self, indent) -> List[str]:
         return [f'[{self.hint_name}]Relu({self.input_readable_str()})']
+
+
+class Transform(Node):
+    """
+    Layout Transform operator
+    """
+    def __init__(
+        self, name, hint_name, inputs, src_layout, dst_layout, output_shape
+    ):
+        super().__init__("transform", name, hint_name, inputs, output_shape)
+        self.src_layout = src_layout
+        self.dst_layout = dst_layout
+        self.need_transform = (src_layout != dst_layout)
+    
+    @staticmethod
+    def from_config(config, name2node):
+        node = Transform(
+            name=config['name'],
+            hint_name=config['hint_name'],
+            inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
+                    config['inputs']],
+            src_layout=config["src_layout"],
+            dst_layout=config["dst_layout"],
+            output_shape=config['output_shape'],
+        )
+        for ti, term in enumerate(node.inputs):
+            for vi, value in enumerate(term):
+                name2node[value.node.name].uses.append((node, ti, vi))
+        return node
+
+    def export_config(self):
+        config = {
+            'type': 'transform',
+            'name': self.name,
+            'hint_name': self.hint_name,
+            'inputs': None if self.inputs is None else [[value.export_config() for value in term] for term in
+                                                        self.inputs],
+            'src_layout': self.src_layout,
+            'dst_layout': self.dst_layout,
+            'output_shape': self.output_shape,
+        }
+        return config
+
+    @property
+    def input_shape(self):
+        return (sum(term[0].length for term in self.inputs), *self.inputs[0][0].node.output_shape[1:])
+
+    def infer_shape(self):
+        self.output_shape = self.input_shape
+
+    def flops(self):
+        return self.input_flops()
+
+    def memory_access(self):
+        if self.need_transform:
+            return self.input_memory_access()
+        else:
+            return 
+
+    def kernels(self):
+        if self.need_transform:
+            return 1 + self.input_kernels()
+        else:
+            return self.input_kernels()
+
+    def readable_lines(self, indent) -> List[str]:
+        return [f'[{self.hint_name}]Transform({self.input_readable_str()})[{self.src_layout}->{self.dst_layout}]']
 
 
 class Block:

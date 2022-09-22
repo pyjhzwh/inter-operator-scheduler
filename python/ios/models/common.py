@@ -4,7 +4,7 @@ Utilities used to construct computation graph.
 Please refer the definition of inception v3, nasnet, randwire, and squeezenet for the definition of network.
 """
 from typing import Tuple, List
-from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Value, Node, Block, Sequential, Activation, Element, Graph
+from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph
 
 name_index = 0
 
@@ -514,3 +514,17 @@ def get_parts(block, split_vars: List[Value]):
         assert pi is not None
         parts[pi].append(node)
     return parts
+
+def transform(block: Block, inputs, src_layout, dst_layout, is_exit=False):
+    name = new_name()
+    rel = Transform(name, name, inputs, src_layout, dst_layout, None)
+    rel.infer_shape()
+    print(rel.readable_lines(0))
+    for ti, term in enumerate(inputs):
+        for vi, value in enumerate(term):
+            value.node.uses.append((rel, ti, vi))
+    if is_exit:
+        block.exit_node = rel
+    else:
+        block.inner_nodes.append(rel)
+    return Value(rel, 0, rel.output_shape[0])
