@@ -83,22 +83,23 @@ bool is_NHWC_layout(int* shape, int* stride)
     return true;
 }
 
-// string infer_layout(int N, int C, int H, int W, int* stride)
-// {
-//     int shape[4] = {N, C, H, W};
-//     if(is_NCHW_layout(shape, stride))
-//         return "NCHW";
-//     else {
-//         assert(is_NHWC_layout(shape, stride));
-//         return "NHWC";
-//     }
-// }
+bool is_layout(int N, int C, int H, int W, int* stride, string layout)
+{
+    int shape[4] = {N, C, H, W};
+    // we need to check stride in case of N111, where it could be both NCHW and NHWC
+    if(layout == "NCHW" && is_NCHW_layout(shape, stride))
+        return true;
+    else if (layout == "NHWC" && is_NHWC_layout(shape, stride))
+        return true;
+    return false;
+}
 
 
 struct ConvKey {
     int attrs[12];
     ConvKey() {}
-    ConvKey(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups) {
+    ConvKey(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
+        cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
         attrs[0] = batch_size;
         attrs[1] = in_channels;
         attrs[2] = input_h;
@@ -111,6 +112,8 @@ struct ConvKey {
         attrs[9] = padding_h;
         attrs[10] = padding_w;
         attrs[11] = groups;
+        attrs[12] = input_layout;
+        attrs[13] = output_layout;
     }
     void print() {
         fprintf(stderr, "input_shape: %d %d %d %d  out_channels: %d  kernel, stride, padding: %d %d, %d %d, %d %d  groups: %d\n",
@@ -193,8 +196,9 @@ struct CudnnContext {
 CudnnContext contexts[MAX_NUM_GROUPS];
 
 
-cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups) {
-    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups);
+cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
+    cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
+    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
     if(conv_alg_map.count(key))
         return conv_alg_map.get(key);
     data_type *input_data, *filter_data, *output_data;
@@ -207,7 +211,7 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     checkCUDNN(cudnnCreateFilterDescriptor(&filterDesc));
     checkCUDNN(cudnnCreateTensorDescriptor(&outputTensor));
     checkCUDNN(cudnnCreateConvolutionDescriptor(&convDesc));
-    checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, cudnn_data_format, cudnn_data_type, batch_size, in_channels, input_h, input_w));
+    checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
     assert(in_channels % groups == 0);
     checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, cudnn_data_format, out_channels, in_channels / groups, kernel_h, kernel_w));
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
@@ -219,7 +223,7 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     assert(c == out_channels);
     assert(h == output_h);
     assert(w == output_w);
-    checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, cudnn_data_format, cudnn_data_type, n, c, h, w));
+    checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, output_layout, cudnn_data_type, n, c, h, w));
 
     size_t input_size = sizeof(data_type) * batch_size * in_channels * input_h * input_w;
     size_t filter_size = sizeof(data_type) * out_channels * (in_channels / groups)* kernel_h * kernel_w;
@@ -269,6 +273,9 @@ struct ConvOP {
     int output_h;
     int output_w;
 
+    cudnnTensorFormat_t input_layout;
+    cudnnTensorFormat_t output_layout;
+
     CudnnContext *context;
 
     cudnnConvolutionFwdAlgo_t conv_alg;
@@ -282,7 +289,8 @@ struct ConvOP {
     data_type *filter_data;
     data_type *bias_data;
 
-    void init(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups, string act) {
+    void init(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups, string act,
+        string input_layout, string output_layout) {
         this->batch_size = batch_size;
         this->in_channels = in_channels;
         this->input_h = input_h;
@@ -299,6 +307,8 @@ struct ConvOP {
         this->has_act = (act != "identity");
         this->output_h = 1 + (input_h - kernel_h + 2 * padding_h) / stride_h;
         this->output_w = 1 + (input_w - kernel_w + 2 * padding_w) / stride_w;
+        this->input_layout = getCudNNLayoutFromStr(input_layout);
+        this->output_layout = getCudNNLayoutFromStr(output_layout);
     }
     size_t get_filter_size() {
         return sizeof(data_type) * out_channels * (in_channels / groups) * kernel_h * kernel_w;
@@ -314,7 +324,7 @@ struct ConvOP {
         checkCUDNN(cudnnCreateFilterDescriptor(&filterDesc));
         checkCUDNN(cudnnCreateTensorDescriptor(&outputTensor));
         checkCUDNN(cudnnCreateConvolutionDescriptor(&convDesc));
-        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, cudnn_data_format, cudnn_data_type, batch_size, in_channels, input_h, input_w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
         checkCUDNN(cudnnSetTensor4dDescriptor(biasTensor, cudnn_data_format, cudnn_bias_data_type, 1, out_channels, 1, 1));
         assert(in_channels % groups == 0);
         checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, cudnn_data_format, out_channels, in_channels / groups, kernel_h, kernel_w));
@@ -327,7 +337,7 @@ struct ConvOP {
         assert(c == out_channels);
         assert(h == output_h);
         assert(w == output_w);
-        checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, cudnn_data_format, cudnn_data_type, n, c, h, w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, output_layout, cudnn_data_type, n, c, h, w));
         if (has_act) {
             cudnnActivationMode_t act_mode;
             if(act == "relu") {
@@ -349,7 +359,7 @@ struct ConvOP {
         checkCUDA(cudaMalloc(&filter_data, filter_size));
         checkCUDA(cudaMalloc(&bias_data, bias_size));
         checkCUDA(cudaMalloc(&output_data, output_size));
-        this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups);
+        this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
     }
     void forward() {
         const float alpha = 1.0f;
@@ -642,13 +652,10 @@ struct TransformOp {
         this->C = in_channels;
         this->H = input_h;
         this->W = input_w;
-        for(int i=0; i < 4; i++) {
-            this->stride[i] = input_stride[i];
-        }
-        // assert(infer_layout(N, C, H, W, input_stride) == _src_layout);
+        assert(is_layout(batch_size, in_channels, input_h, input_w, input_stride, _src_layout));
         this->src_layout = getCudNNLayoutFromStr(_src_layout);
         this->dst_layout = getCudNNLayoutFromStr(_dst_layout);
-        if(_src_layout == _dst_layout)
+        if(_src_layout == _dst_layout || is_layout(batch_size, in_channels, input_h, input_w, input_stride, _dst_layout))
             needTransform = false;
         else
             needTransform = true;
@@ -720,7 +727,7 @@ struct NodeBase {
     void init_stride(string layout) {
         this->layout = layout;
         int shape[4] = {batch_size, out_channels, output_h, output_w};
-        if(this->layout == "NCHW") {
+        if (this->layout == "NCHW") {
             int cnt = 1;
             for (int i= 4-1; i >= 0; i--)
             {
@@ -991,7 +998,9 @@ struct Conv: NodeBase {
                      conv_config["padding"][0].asInt(),
                      conv_config["padding"][1].asInt(),
                      conv_config["groups"].asInt(),
-                     conv_config["act"].asString());
+                     conv_config["act"].asString(),
+                     input.layout,
+                     conv_config["layout"].asString());
         this->batch_size = input.batch_size;
         this->out_channels = conv_op.out_channels;
         this->output_h = conv_op.output_h;
@@ -1266,9 +1275,7 @@ struct Transform: NodeBase {
         this->name = config["name"].asString();
         this->input.init(config["inputs"], node_map);
         transform_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
-                         input.stride,
-                         config["src_layout"].asString(),
-                         config["dst_layout"].asString());
+                          input.stride, input.layout, config["dst_layout"].asString());
         this->batch_size = input.batch_size;
         this->out_channels =  input.out_channels;
         this->output_h =  input.output_h;

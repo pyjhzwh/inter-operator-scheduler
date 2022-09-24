@@ -311,7 +311,7 @@ class Conv(Node):
     act: str, must be one of 'relu', 'sigmoid', 'tanh', 'identity'
         The activation function applied to the output of convolution
     """
-    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias']
+    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout']
 
     def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW"):
         super().__init__("conv", name, hint_name, inputs, output_shape, layout)
@@ -322,6 +322,8 @@ class Conv(Node):
         self.out_channels = out_channels
         self.act = act
         assert act in ['relu', 'sigmoid', 'tanh', 'identity']
+        self.input_layout = inputs[0][0].node.layout
+        self.output_layout = layout
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -405,7 +407,7 @@ class Conv(Node):
         )
 
     def readable_lines(self, indent) -> List[str]:
-        return [f'[{self.hint_name}]Conv2d({self.input_readable_str()})']
+        return [f'[{self.hint_name}]Conv2d({self.input_readable_str()})[{self.input_layout}->{self.output_layout}]']
 
 
 class Sequential(Node):
@@ -826,12 +828,12 @@ class Transform(Node):
     Layout Transform operator
     """
     def __init__(
-        self, name, hint_name, inputs, src_layout, dst_layout, output_shape
+        self, name, hint_name, inputs, dst_layout, output_shape
     ):
         super().__init__("transform", name, hint_name, inputs, output_shape, dst_layout)
-        self.src_layout = src_layout
+        # print("inputs", inputs)
+        self.src_layout = inputs[0][0].node.layout
         self.dst_layout = dst_layout
-        self.need_transform = (src_layout != dst_layout)
     
     @staticmethod
     def from_config(config, name2node):
@@ -840,7 +842,7 @@ class Transform(Node):
             hint_name=config['hint_name'],
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
                     config['inputs']],
-            src_layout=config["src_layout"],
+            # src_layout=config["src_layout"],
             dst_layout=config["dst_layout"],
             output_shape=config['output_shape'],
             layout=config['layout'],
@@ -875,16 +877,10 @@ class Transform(Node):
         return self.input_flops()
 
     def memory_access(self):
-        if self.need_transform:
-            return self.input_memory_access()
-        else:
-            return 
+        return self.input_memory_access()
 
     def kernels(self):
-        if self.need_transform:
-            return 1 + self.input_kernels()
-        else:
-            return self.input_kernels()
+        return 1 + self.input_kernels()
 
     def readable_lines(self, indent) -> List[str]:
         return [f'[{self.hint_name}]Transform({self.input_readable_str()})[{self.src_layout}->{self.dst_layout}]']

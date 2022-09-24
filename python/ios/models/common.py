@@ -43,7 +43,7 @@ def setup_op(op: Node, inputs: List[List[Value]], block: Block, is_exit=False):
         block.inner_nodes.append(op)
 
 
-def placeholder(output_shape):
+def placeholder(output_shape, layout="NCHW"):
     """
     Placeholder.
 
@@ -53,11 +53,11 @@ def placeholder(output_shape):
         The value represents the placeholder output.
     """
     name = new_name()
-    holder = Placeholder(name, name, output_shape)
+    holder = Placeholder(name, name, output_shape, layout=layout)
     return Value(holder, 0, holder.output_shape[0])
 
 
-def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu",
+def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu", layout="NCHW",
            is_exit=False):
     """
     Add a convolution operator to the end of given block.
@@ -93,7 +93,7 @@ def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), pad
         A value represents the output of the operator.
     """
     name = new_name()
-    conv = Conv(name, name, inputs, out_channels, kernel, stride, padding, groups, act, None)
+    conv = Conv(name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, layout)
     setup_op(conv, inputs, block, is_exit)
     # conv.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -537,9 +537,9 @@ def get_parts(block, split_vars: List[Value]):
         parts[pi].append(node)
     return parts
 
-def transform(block: Block, inputs, src_layout, dst_layout, is_exit=False):
+def transform(block: Block, inputs, dst_layout, is_exit=False):
     name = new_name()
-    transform = Transform(name, name, inputs, src_layout, dst_layout, None)
+    transform = Transform(name, name, inputs, dst_layout, None)
     setup_op(transform, inputs, block, is_exit)
     # rel.infer_shape()
     # for ti, term in enumerate(inputs):
