@@ -5,7 +5,7 @@ import numpy as np
 import logging
 import itertools
 from tqdm import tqdm
-from ios.ir import Graph, Block, Conv, Value, Pool, Placeholder, Node, Identity, Sequential
+from ios.ir import Graph, Block, Conv, Value, Pool, Placeholder, Node, Identity, Sequential, Transform_Conv
 from ios.cost_model import CostModel, IOSCostModel, RandomCostModel
 from ios.utils import iter_subset
 
@@ -98,7 +98,7 @@ def optimize(graph: Graph,
     """
     if cost_model is None:
         cost_model = IOSCostModel()
-    graph_enter = Placeholder(graph.input.name, graph.input.hint_name, graph.input.output_shape)
+    graph_enter = Placeholder(graph.input.name, graph.input.hint_name, graph.input.output_shape, graph.input.layout)
     graph_enter.output_shape = graph.enter_node.output_shape
     blocks = []
     on_debug = debug_dp_info is not None
@@ -147,6 +147,7 @@ def optimize(graph: Graph,
             ep: Dict[int, Tuple[List[int], str]] = {}
             merge_latency: Dict[int, float] = {}
             parallel_latency: Dict[int, float] = {}
+            transform_latency: Dict[int, float] = {}
             part_graph = build_graph(npart, nid)
             chains = graph_chain_decomposition(part_graph)
 
@@ -166,7 +167,7 @@ def optimize(graph: Graph,
 
             ustate = sum(1 << i for i in ipart)
             dop(ustate, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                max_num_groups, merge_latency, parallel_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
+                max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
             stage_list.extend(get_stage_list(ep, ustate))
 
             if on_debug:
@@ -188,7 +189,6 @@ def optimize(graph: Graph,
 
     if verbose:
         bar_state.close()
-
     new_graph = Graph(graph.name + "_" + opt_type, graph_enter, blocks)
     new_graph.infer_shape()
     return new_graph
@@ -294,21 +294,73 @@ def check_parallel(ss, successor_dict, max_num_streams):
     return True
 
 
-def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, cost_model, idn, nid,
+def check_transform(s, idn) -> bool:
+    """
+    Check whether a set of nodes is valid to transform layout
+    """
+    nds = [idn[i] for i in state2iset(s)]
+    for nd in nds:
+        if not isinstance(nd, Conv):  # current only transform before conv
+            return False
+    return True
+
+
+def get_transform_latency(
+    stage_seqs: List[List[int]], cost_model, idn, batch_size: int, warmup: int, number: int, repeat: int
+):
+    # consider single conv
+    if len(stage_seqs) == 1 and len(stage_seqs[0]) == 1:
+        if isinstance(idn[stage_seqs[0][0]], Conv):
+            nd = idn[stage_seqs[0][0]]
+            terms = nd.inputs
+            out_channels = nd.out_channels
+            kernel = nd.kernel[0], nd.kernel[1]
+            stride = nd.stride[0], nd.stride[1]
+            padding = nd.padding[0], nd.padding[1]
+            groups = nd.groups
+            act = nd.act
+            layouts = ["NCHW", "NHWC"]
+            exe_time_layout_map = {}
+            # exe_time_list = []
+            for input_layout, output_layout in itertools.product(layouts, layouts):
+                conv = Transform_Conv('c', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                conv.infer_shape()
+                exe_time = float(
+                    np.mean(cost_model.get_stage_latency([[conv]], batch_size, warmup, number, repeat)))
+                exe_time_layout_map[exe_time] = f"{input_layout}_{output_layout}"
+                # exe_time_list.append(exe_time)
+
+            best_exe_time = sorted(exe_time_layout_map.keys())[0]
+            best_layout = exe_time_layout_map[best_exe_time]
+            print(f"best_layout for Conv{nd.name}: {best_layout}")
+
+            return True, "transform_"+best_layout, best_exe_time
+
+    return False, "None", 100.0
+
+
+
+def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, transform_latency, cost_model, idn, nid,
             batch_size, warmup, number, repeat) -> float:
     """
     Measure the latency of a stage.
+    return: latency, qtype, original latency
     """
     stage_seqs, qtype = stage
     ss = sum(1 << u for u in itertools.chain(*stage_seqs))
+    if ss not in transform_latency:
+        transform_latency[ss] = get_transform_latency(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat)
+    could_transform, transform_qtype, transform_time = transform_latency[ss]
     if qtype == 'merge':
         if ss in merge_latency:
-            return merge_latency[ss]
+            return merge_latency[ss], qtype, merge_latency[ss]
         snodes = state2nset(ss, idn)
         if len(stage_seqs) == 1:
             assert len(snodes) == 1
-            merge_latency[ss] = float(
+            cur_exe_time = float(
                 np.mean(cost_model.get_stage_latency([[snodes[0]]], batch_size, warmup, number, repeat)))
+            merge_latency[ss] = cur_exe_time
         else:
             convs = [nd for nd in snodes if isinstance(nd, Conv)]
             assert len(convs) == len(snodes)
@@ -321,21 +373,31 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
             act = convs[0].act
             conv = Conv('c', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
                         groups=groups, act=act, output_shape=None)
-            merge_latency[ss] = float(
+            cur_exe_time = float(
                 np.mean(cost_model.get_stage_latency([[conv]], batch_size, warmup, number, repeat)))
-        return merge_latency[ss]
+            merge_latency[ss] = cur_exe_time
+        if could_transform and transform_time < cur_exe_time:
+            print(f"find transformation {transform_qtype} better: {transform_time} < {merge_latency[ss]}")
+            merge_latency[ss] = transform_time
+            qtype = transform_qtype
+        return merge_latency[ss], qtype, cur_exe_time
     elif qtype == 'parallel':
         if ss in parallel_latency:
-            return parallel_latency[ss]
+            return parallel_latency[ss], qtype, parallel_latency[ss]
         stage_seqs_nodes = []
         for seq in stage_seqs:
             seq_nodes = []
             for uid in seq:
                 seq_nodes.append(idn[uid])
             stage_seqs_nodes.append(seq_nodes)
-        parallel_latency[ss] = float(
+        cur_exe_time = float(
             np.mean(cost_model.get_stage_latency(stage_seqs_nodes, batch_size, warmup, number, repeat)))
-        return parallel_latency[ss]
+        parallel_latency[ss] = cur_exe_time
+        if could_transform and transform_time < cur_exe_time:
+            print(f"find transformation {transform_qtype} better: {transform_time} < {parallel_latency[ss]}")
+            parallel_latency[ss] = transform_time
+            qtype = transform_qtype
+        return parallel_latency[ss], qtype, cur_exe_time
     else:
         raise ValueError
 
@@ -512,7 +574,7 @@ def ending_iterator(
 
 def dop(s: int,
         block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size, max_num_groups,
-        merge_latency, parallel_latency, cost_model, batch_size, warmup, number, repeat, bar_state) -> float:
+        merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state) -> float:
     """
     The main dynamic programming progress.
     """
@@ -537,13 +599,15 @@ def dop(s: int,
     s1 = sum(1 << u for u in iset if len(successor_dict[u]) == 1)
     if "merge" in opt_type:
         for ss in iter_subset(s1):
-            if check_merge(ss, idn):
+            if check_merge(ss, idn) or check_transform(ss, idn):
                 stage = [[u] for u in state2iset(ss)], 'merge'
                 val1 = dop(s - ss, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                           max_num_groups, merge_latency, parallel_latency, cost_model, batch_size, warmup, number,
+                           max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number,
                            repeat, bar_state)
-                val2 = latency(stage, block, merge_latency, parallel_latency, cost_model, idn, nid, batch_size, warmup,
-                               number, repeat)
+                val2, new_stage_type, original_time = latency(stage, block, merge_latency, parallel_latency, transform_latency,
+                            cost_model, idn, nid, batch_size, warmup, number, repeat)
+                if new_stage_type != "merge":
+                    stage = [[u] for u in state2iset(ss)], new_stage_type
                 val = val1 + val2
                 if on_debug:
                     debug_dp_info['#transitions'][-1] += 1
@@ -576,9 +640,11 @@ def dop(s: int,
             stage = groups, 'parallel'
             consumed = sum(1 << u for u in itertools.chain(*stage[0]))
             val1 = dop(s - consumed, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                       max_num_groups, merge_latency, parallel_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
-            val2 = latency(stage, block, merge_latency, parallel_latency, cost_model, idn, nid, batch_size, warmup,
-                           number, repeat)
+                       max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
+            val2, new_stage_type, original_time = latency(stage, block, merge_latency, parallel_latency, transform_latency,
+                        cost_model, idn, nid, batch_size, warmup, number, repeat)
+            if new_stage_type != "parallel":
+                stage = groups, new_stage_type
             val = val1 + val2
             if on_debug:
                 debug_dp_info['#transitions'][-1] += 1
@@ -611,6 +677,7 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
     """
     Construct the optimized computation graph.
     """
+    transform_conv_count = 0
     inner_nodes = []
     stages = []
     if len(constructed_blocks) == 0:
@@ -709,6 +776,28 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             new_node.infer_shape()
             inner_nodes.append(new_node)
             stages.append([[new_node.name]])
+        elif "transform" in qtype:
+            assert len(stage_seqs) == 1 and len(stage_seqs[0]) == 1
+            assert isinstance(idn[stage_seqs[0][0]], Conv)
+            nd = idn[stage_seqs[0][0]]
+            terms = nd.inputs
+            out_channels = nd.out_channels
+            kernel = nd.kernel[0], nd.kernel[1]
+            stride = nd.stride[0], nd.stride[1]
+            padding = nd.padding[0], nd.padding[1]
+            groups = nd.groups
+            act = nd.act
+            _, input_layout, output_layout = qtype.split("_")
+            new_node_name = nd.name
+            new_node = Transform_Conv(new_node_name, new_node_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+            if compute_weight:
+                copy_weights(new_node, nd)
+            new_node.infer_shape()
+            transform_conv_count += 1
+            out_dict[nd] = (new_node, 0, new_node.output_shape[0])
+            inner_nodes.append(new_node)
+            stages.append([[new_node.name]])
         else:
             seq_in_stage = []
             for seq in stage_seqs:
@@ -733,6 +822,8 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                         snode_config["inputs"] = []
                         new_node = Node.from_config(snode_config, {})
                         new_node.inputs = merge_inputs(get_new_terms(snode.inputs, new_node, do_sort=False))
+                        if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                            new_node.update_input_layout()
                         if compute_weight:
                             copy_weights(new_node, snode)
                         new_node.infer_shape()
@@ -741,5 +832,6 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                 inner_nodes.extend(new_nodes)
                 seq_in_stage.append([new_node.name for new_node in new_nodes])
             stages.append(seq_in_stage)
+
     new_exit_node = inner_nodes.pop()
     return Block(new_enter_node, new_exit_node, inner_nodes, stages)

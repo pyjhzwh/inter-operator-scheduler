@@ -322,7 +322,10 @@ class Conv(Node):
         self.out_channels = out_channels
         self.act = act
         assert act in ['relu', 'sigmoid', 'tanh', 'identity']
-        self.input_layout = inputs[0][0].node.layout
+        if self.inputs and len(self.inputs) > 0:
+            self.input_layout = self.inputs[0][0].node.layout
+        else:
+            self.input_layout = "NCHW"
         self.output_layout = layout
 
         #
@@ -331,6 +334,10 @@ class Conv(Node):
         #
         self.weight = None
         self.bias = None
+    
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.input_layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -884,6 +891,108 @@ class Transform(Node):
 
     def readable_lines(self, indent) -> List[str]:
         return [f'[{self.hint_name}]Transform({self.input_readable_str()})[{self.src_layout}->{self.dst_layout}]']
+
+
+class Transform_Conv(Node):
+    """
+    Layout Transform operator + Conv operator
+    """
+    __slots__ = [
+        'out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'conv_in_layout', 'conv_out_layout',
+        'transform_src_layout', 'transform_dst_layout'
+    ]
+
+    def __init__(
+        self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
+        conv_in_layout="NCHW", conv_out_layout="NCHW",
+    ):
+        super().__init__(f"transform_conv_{conv_in_layout}_{conv_out_layout}",
+            name, hint_name, inputs, output_shape, conv_out_layout)
+        self.transform_src_layout = inputs[0][0].node.layout
+        self.transform_dst_layout = conv_in_layout
+        
+        self.kernel = kernel
+        self.stride = stride
+        self.padding = padding
+        self.groups = groups
+        self.out_channels = out_channels
+        self.act = act
+        assert act in ['relu', 'sigmoid', 'tanh', 'identity']
+        self.conv_in_layout = conv_in_layout
+        self.conv_out_layout = conv_out_layout
+
+        #
+        # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
+        # measure the latency. However, it must be set properly before inference.
+        #
+        self.weight = None
+        self.bias = None
+    
+    @staticmethod
+    def from_config(config, name2node):
+        node = Transform_Conv(
+            name=config['name'],
+            hint_name=config['hint_name'],
+            inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
+                    config['inputs']],
+            out_channels=config['out_channels'],
+            kernel=config['kernel'],
+            stride=config['stride'],
+            padding=config['padding'],
+            groups=config['groups'],
+            act=config['act'],
+            output_shape=config['output_shape'],
+            conv_in_layout=config['conv_in_layout'],
+            conv_out_layout=config["conv_out_layout"],
+        )
+        for ti, term in enumerate(node.inputs):
+            for vi, value in enumerate(term):
+                name2node[value.node.name].uses.append((node, ti, vi))
+        return node
+
+    def export_config(self):
+        config = {
+            'type': f"transform_conv_{self.conv_in_layout}_{self.conv_out_layout}",
+            'name': self.name,
+            'hint_name': self.hint_name,
+            'inputs': None if self.inputs is None else [[value.export_config() for value in term] for term in
+                                                        self.inputs],
+            'out_channels': self.out_channels,
+            'kernel': self.kernel,
+            'stride': self.stride,
+            'padding': self.padding,
+            'groups': self.groups,
+            'act': self.act,
+            'output_shape': self.output_shape,
+            'conv_in_layout': self.conv_in_layout,
+            'conv_out_layout': self.conv_out_layout,
+        }
+        return config
+
+    @property
+    def input_shape(self):
+        return (sum(term[0].length for term in self.inputs), *self.inputs[0][0].node.output_shape[1:])
+
+    def infer_shape(self):
+        self.output_shape = (
+            self.out_channels,
+            1 + (self.input_shape[1] - self.kernel[0] + self.padding[0] * 2) // self.stride[0],
+            1 + (self.input_shape[2] - self.kernel[1] + self.padding[1] * 2) // self.stride[1]
+        )
+
+    def flops(self):
+        flops_per_output = (1 + self.kernel[0] * self.kernel[1] * self.input_shape[0] // self.groups)
+        flops_of_conv = self.output_shape[0] * self.output_shape[1] * self.output_shape[2] * flops_per_output
+        return flops_of_conv + self.input_flops()
+
+    def memory_access(self):
+        return self.input_shape[0] * self.input_shape[1] * self.input_shape[2] + self.input_memory_access()
+
+    def kernels(self):
+        return 1 + self.input_kernels()
+
+    def readable_lines(self, indent) -> List[str]:
+        return [f'[{self.hint_name}]Transform_Conv2d({self.input_readable_str()})[Transform:{self.transform_src_layout}->{self.transform_dst_layout}, Conv:{self.conv_in_layout}->{self.conv_out_layout}]']
 
 
 class Block:

@@ -94,6 +94,29 @@ bool is_layout(int N, int C, int H, int W, int* stride, string layout)
     return false;
 }
 
+void get_stride(int N, int C, int H, int W, string layout, int* stride)
+{
+    int shape[4] = {N, C, H, W};
+    if (layout == "NCHW") {
+        int cnt = 1;
+        for (int i= 3; i >=0; i--){
+            stride[i] = cnt;
+            cnt *= shape[i];
+        }
+    }
+    else {
+        assert(layout == "NHWC");
+        int NHWC_stride_order[4] = {0, 2, 3, 1};
+        int cnt = 1;
+        for(int i= 3; i >=0; i--){
+            stride[NHWC_stride_order[i]] = cnt;
+            cnt *= shape[NHWC_stride_order[i]];
+    }
+        
+    }
+}
+
+
 
 struct ConvKey {
     int attrs[12];
@@ -380,6 +403,12 @@ struct ConvOP {
                     outputTensor, output_data));
 #endif
         } else {
+            // std::cout << " context->dnn " << context->dnn << " &alpha " << &alpha << " inputTensor " << inputTensor
+            //         << " input_data " << input_data << " filterDesc " << filterDesc << " filter_data " << filter_data
+            //         << " convDesc " << convDesc << " conv_alg " << conv_alg << " context->space " << context->space
+            //         << " context->max_size " << context->max_size << " &beta " << &beta
+            //         << " outputTensor " << outputTensor << " output_data " << output_data << std::endl;
+            // std::cout << "check null or not" << (input_data == nullptr) << std::endl;
             checkCUDNN(cudnnConvolutionForward(
                     context->dnn, &alpha, inputTensor, input_data, filterDesc, filter_data,
                     convDesc, conv_alg, context->space, context->max_size,
@@ -664,8 +693,11 @@ struct TransformOp {
     void map(data_type *input_data, CudnnContext *context) {
         this->input_data = input_data;
         this->context = context;
-        if (! this->needTransform)
+        if (!this->needTransform)
+        {
+            output_data = input_data;
             return;
+        }
         checkCUDNN(cudnnCreateTensorDescriptor(&srcTensor));
         checkCUDNN(cudnnCreateTensorDescriptor(&dstTensor));
 
@@ -682,7 +714,6 @@ struct TransformOp {
 
     void forward() {
         if (!this->needTransform) {
-            output_data = input_data;
             return;
         }
         const float alpha = 1.0f;
@@ -736,6 +767,7 @@ struct NodeBase {
             }
         }
         else {
+            std::cout << this->name << " layout:" << this->layout << std::endl;
             assert(this->layout == "NHWC");
             int NHWC_stride_order[4] = {0, 2, 3, 1};
             int cnt = 1;
@@ -1022,6 +1054,203 @@ struct Conv: NodeBase {
     void unmap() override {
         input.unmap();
         conv_op.unmap();
+    }
+};
+
+// Transform + Conv + Transform; input layout == output layout
+struct Transform_Conv: NodeBase {
+    Input input;
+    ConvOP conv_op;
+    TransformOp transform_op0;
+    TransformOp transform_op1;
+
+    void virtual init(const Json::Value &conv_config, const std::map<string,NodeBase*> &node_map) {
+        return;
+    }
+
+    void map() override {
+        input.set_context(context);
+        input.map();
+        transform_op0.map(input.output_data, context);
+        conv_op.map(transform_op0.output_data, context);
+        transform_op1.map(conv_op.output_data, context);
+        this->output_data = transform_op1.output_data;
+    }
+    void forward() override {
+        input.forward();
+        transform_op0.forward();
+        conv_op.forward();
+        transform_op1.forward();
+    }
+    void unmap() override {
+        input.unmap();
+        transform_op0.unmap();
+        conv_op.unmap();
+        transform_op1.unmap();
+    }
+};
+
+// Transform(input.layout->NCHW) Conv(NCHW->NCHW) Transform(NCHW->input.layout)
+struct Conv_NCHW_NCHW: Transform_Conv {
+
+    void init(const Json::Value &conv_config, const std::map<string,NodeBase*> &node_map) {
+        this->name = conv_config["name"].asString();
+        this->input.init(conv_config["inputs"], node_map);
+        transform_op0.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w,
+            input.stride, input.layout, "NCHW"
+        );
+        conv_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                     conv_config["out_channels"].asInt(),
+                     conv_config["kernel"][0].asInt(),
+                     conv_config["kernel"][1].asInt(),
+                     conv_config["stride"][0].asInt(),
+                     conv_config["stride"][1].asInt(),
+                     conv_config["padding"][0].asInt(),
+                     conv_config["padding"][1].asInt(),
+                     conv_config["groups"].asInt(),
+                     conv_config["act"].asString(),
+                     "NCHW",
+                     "NCHW");
+        int transform_op1_input_stride[4];
+        get_stride(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            "NCHW", transform_op1_input_stride
+        );
+        transform_op1.init(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            transform_op1_input_stride, "NCHW", input.layout
+        );
+        this->batch_size = input.batch_size;
+        this->out_channels = conv_op.out_channels;
+        this->output_h = conv_op.output_h;
+        this->output_w = conv_op.output_w;
+        this->context = nullptr;
+        this->output_data = nullptr;
+        this->init_stride(input.layout);
+    }
+};
+
+// Transform(input.layout->NCHW) Conv(NCHW->NHWC) Transform(NHWC->input.layout)
+struct Conv_NCHW_NHWC: Transform_Conv {
+
+    void init(const Json::Value &conv_config, const std::map<string,NodeBase*> &node_map) {
+        this->name = conv_config["name"].asString();
+        this->input.init(conv_config["inputs"], node_map);
+        transform_op0.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w,
+            input.stride, input.layout, "NCHW"
+        );
+        conv_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                     conv_config["out_channels"].asInt(),
+                     conv_config["kernel"][0].asInt(),
+                     conv_config["kernel"][1].asInt(),
+                     conv_config["stride"][0].asInt(),
+                     conv_config["stride"][1].asInt(),
+                     conv_config["padding"][0].asInt(),
+                     conv_config["padding"][1].asInt(),
+                     conv_config["groups"].asInt(),
+                     conv_config["act"].asString(),
+                     "NCHW",
+                     "NHWC");
+        int transform_op1_input_stride[4];
+        get_stride(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            "NHWC", transform_op1_input_stride
+        );
+        transform_op1.init(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            transform_op1_input_stride, "NHWC", input.layout
+        );
+        this->batch_size = input.batch_size;
+        this->out_channels = conv_op.out_channels;
+        this->output_h = conv_op.output_h;
+        this->output_w = conv_op.output_w;
+        this->context = nullptr;
+        this->output_data = nullptr;
+        this->init_stride(input.layout);
+    }
+};
+
+// Transform(input.layout->NHWC) Conv(NHWC->NCHW) Transform(NCHW->input.layout)
+struct Conv_NHWC_NCHW: Transform_Conv {
+
+    void init(const Json::Value &conv_config, const std::map<string,NodeBase*> &node_map) {
+        this->name = conv_config["name"].asString();
+        this->input.init(conv_config["inputs"], node_map);
+        transform_op0.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w,
+            input.stride, input.layout, "NHWC"
+        );
+        conv_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                     conv_config["out_channels"].asInt(),
+                     conv_config["kernel"][0].asInt(),
+                     conv_config["kernel"][1].asInt(),
+                     conv_config["stride"][0].asInt(),
+                     conv_config["stride"][1].asInt(),
+                     conv_config["padding"][0].asInt(),
+                     conv_config["padding"][1].asInt(),
+                     conv_config["groups"].asInt(),
+                     conv_config["act"].asString(),
+                     "NHWC",
+                     "NCHW");
+        int transform_op1_input_stride[4];
+        get_stride(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            "NCHW", transform_op1_input_stride
+        );
+        transform_op1.init(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            transform_op1_input_stride, "NCHW", input.layout
+        );
+        this->batch_size = input.batch_size;
+        this->out_channels = conv_op.out_channels;
+        this->output_h = conv_op.output_h;
+        this->output_w = conv_op.output_w;
+        this->context = nullptr;
+        this->output_data = nullptr;
+        this->init_stride(input.layout);
+    }
+};
+
+// Transform(input.layout->NHWC) Conv(NHWC->NHWC) Transform(NHWC->input.layout)
+struct Conv_NHWC_NHWC: Transform_Conv {
+
+    void init(const Json::Value &conv_config, const std::map<string,NodeBase*> &node_map) {
+        this->name = conv_config["name"].asString();
+        this->input.init(conv_config["inputs"], node_map);
+        transform_op0.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w,
+            input.stride, input.layout, "NHWC"
+        );
+        conv_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w,
+                     conv_config["out_channels"].asInt(),
+                     conv_config["kernel"][0].asInt(),
+                     conv_config["kernel"][1].asInt(),
+                     conv_config["stride"][0].asInt(),
+                     conv_config["stride"][1].asInt(),
+                     conv_config["padding"][0].asInt(),
+                     conv_config["padding"][1].asInt(),
+                     conv_config["groups"].asInt(),
+                     conv_config["act"].asString(),
+                     "NHWC",
+                     "NHWC");
+        int transform_op1_input_stride[4];
+        get_stride(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            "NHWC", transform_op1_input_stride
+        );
+        transform_op1.init(
+            conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
+            transform_op1_input_stride, "NHWC", input.layout
+        );
+        this->batch_size = input.batch_size;
+        this->out_channels = conv_op.out_channels;
+        this->output_h = conv_op.output_h;
+        this->output_w = conv_op.output_w;
+        this->context = nullptr;
+        this->output_data = nullptr;
+        this->init_stride(input.layout);
     }
 };
 
@@ -1320,6 +1549,14 @@ struct Graph {
     Sequential sequential[MAX_NUM_NODES];
     int num_transform;
     Transform transform[MAX_NUM_NODES];
+    int num_transform_conv_NCHW_NCHW;
+    Conv_NCHW_NCHW transform_conv_NCHW_NCHW[MAX_NUM_NODES];
+    int num_transform_conv_NCHW_NHWC;
+    Conv_NCHW_NHWC transform_conv_NCHW_NHWC[MAX_NUM_NODES];
+    int num_transform_conv_NHWC_NCHW;
+    Conv_NHWC_NCHW transform_conv_NHWC_NCHW[MAX_NUM_NODES];
+    int num_transform_conv_NHWC_NHWC;
+    Conv_NHWC_NHWC transform_conv_NHWC_NHWC[MAX_NUM_NODES];
 
     int num_stages;
     int stage_num_seq[MAX_NUM_NODES];
@@ -1327,7 +1564,10 @@ struct Graph {
     NodeBase* stages[MAX_NUM_NODES][MAX_NUM_GROUPS][MAX_GROUP_SIZE];
 
     void reset() {
-        num_inputs = num_convs = num_pools = num_idents = num_relus = num_elem = num_acts = num_sequential = num_stages = num_transform = 0;
+        num_inputs = num_convs = num_pools = num_idents = num_relus = num_elem =
+        num_acts = num_sequential = num_stages = num_transform = 
+        num_transform_conv_NCHW_NCHW = num_transform_conv_NCHW_NHWC =
+        num_transform_conv_NHWC_NCHW = num_transform_conv_NHWC_NHWC = 0;
     }
 
     NodeBase *add_node(Json::Value node_config, std::map<string, NodeBase*> &node_map) {
@@ -1364,6 +1604,25 @@ struct Graph {
             assert(num_transform < MAX_NUM_NODES);
             transform[num_transform].init(node_config, node_map);
             nb = transform + num_transform++;
+        } else if(node_config["type"].asString() == "transform_conv_NCHW_NCHW") {
+            assert(num_transform_conv_NCHW_NCHW < MAX_NUM_NODES);
+            transform_conv_NCHW_NCHW[num_transform].init(node_config, node_map);
+            nb = transform_conv_NCHW_NCHW + num_transform_conv_NCHW_NCHW++;
+        }
+         else if(node_config["type"].asString() == "transform_conv_NCHW_NHWC") {
+            assert(num_transform_conv_NCHW_NHWC < MAX_NUM_NODES);
+            transform_conv_NCHW_NHWC[num_transform].init(node_config, node_map);
+            nb = transform_conv_NCHW_NHWC + num_transform_conv_NCHW_NHWC++;
+        }
+         else if(node_config["type"].asString() == "transform_conv_NHWC_NCHW") {
+            assert(num_transform_conv_NHWC_NCHW < MAX_NUM_NODES);
+            transform_conv_NHWC_NCHW[num_transform].init(node_config, node_map);
+            nb = transform_conv_NHWC_NCHW + num_transform_conv_NCHW_NCHW++;
+        }
+         else if(node_config["type"].asString() == "transform_conv_NHWC_NHWC") {
+            assert(num_transform_conv_NHWC_NHWC < MAX_NUM_NODES);
+            transform_conv_NHWC_NHWC[num_transform].init(node_config, node_map);
+            nb = transform_conv_NHWC_NHWC + num_transform_conv_NCHW_NCHW++;
         }
         else {
             FatalError("unsupported type " + node_config["type"].asString());

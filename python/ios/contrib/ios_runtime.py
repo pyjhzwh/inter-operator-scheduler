@@ -96,7 +96,7 @@ def stage_latency(stage: List[List[Node]], batch_size, warmup, number, repeat, p
     stage_results_t = ctypes.c_float * int(repeat)
     stage_results = stage_results_t()
     lib.stage_latency(c_string(json.dumps(stage_seqs)),
-                      c_string(json.dumps({nd.name: nd.output_shape for nd in input_nodes})),
+                      c_string(json.dumps({nd.name: [*nd.output_shape, nd.layout,] for nd in input_nodes})),
                       ctypes.c_int(batch_size),
                       ctypes.c_int(warmup),
                       ctypes.c_int(number),
