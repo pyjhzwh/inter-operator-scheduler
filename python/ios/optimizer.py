@@ -37,9 +37,9 @@ def graph_dp_summary(graph: Graph,
 def optimize(graph: Graph,
              batch_size=1,
              cost_model: Optional[CostModel] = None,
-             opt_type: str = 'dp_parallel_merge',
+             opt_type: str = 'dp_parallel_merge_transform',
              warmup=2, number=6, repeat=6,
-             max_num_groups=8, max_part_size=100, compute_weight=False, max_group_size=3,
+             max_num_groups=3, max_part_size=100, compute_weight=False, max_group_size=3,
              debug_dp_info=None, verbose=False) -> Graph:
     """
     Optimize the computation graph and generate a highly optimized schedule.
@@ -148,6 +148,7 @@ def optimize(graph: Graph,
             merge_latency: Dict[int, float] = {}
             parallel_latency: Dict[int, float] = {}
             transform_latency: Dict[int, float] = {}
+            merge_transform_latency: Dict[int, float] = {}
             part_graph = build_graph(npart, nid)
             chains = graph_chain_decomposition(part_graph)
 
@@ -167,7 +168,8 @@ def optimize(graph: Graph,
 
             ustate = sum(1 << i for i in ipart)
             dop(ustate, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
+                max_num_groups, merge_latency, parallel_latency, transform_latency, merge_transform_latency,
+                cost_model, batch_size, warmup, number, repeat, bar_state)
             stage_list.extend(get_stage_list(ep, ustate))
 
             if on_debug:
@@ -386,17 +388,20 @@ def get_transform_latency(
 
 
 
-def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, transform_latency, cost_model, idn, nid,
-            batch_size, warmup, number, repeat) -> float:
+def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, transform_latency, merge_transform_latency, cost_model, idn, nid,
+            batch_size, warmup, number, repeat, try_transform: bool=False) -> float:
     """
     Measure the latency of a stage.
     return: latency, qtype, original latency
     """
     stage_seqs, qtype = stage
     ss = sum(1 << u for u in itertools.chain(*stage_seqs))
-    if ss not in transform_latency:
-        transform_latency[ss] = get_transform_latency(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat)
-    could_transform, transform_qtype, transform_time = transform_latency[ss]
+    could_transform, transform_qtype, transform_time = False, "None", 100.0
+    merge_could_transform, merge_transform_qtype, merge_transform_time = False, "None", 100.0
+    if try_transform:
+        if ss not in transform_latency:
+            transform_latency[ss] = get_transform_latency(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat)
+        could_transform, transform_qtype, transform_time = transform_latency[ss]
     if qtype == 'merge':
         if ss in merge_latency:
             return merge_latency[ss], qtype, merge_latency[ss]
@@ -421,10 +426,25 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
             cur_exe_time = float(
                 np.mean(cost_model.get_stage_latency([[conv]], batch_size, warmup, number, repeat)))
             merge_latency[ss] = cur_exe_time
+            if try_transform:
+                # try layout transform in merged conv
+                if ss not in merge_transform_latency:
+                    tmp_stage_seqs = [[conv.name]]
+                    tmp_idn = {conv.name: conv}
+                    merge_could_transform, merge_transform_qtype, merge_transform_time = get_transform_latency(tmp_stage_seqs, cost_model, tmp_idn, batch_size, warmup, number, repeat)
+                    merge_transform_qtype = "merge_" + merge_transform_qtype
+                    merge_transform_latency[ss] = merge_could_transform, merge_transform_qtype, merge_transform_time
+                else:
+                    merge_could_transform, merge_transform_qtype, merge_transform_time = merge_transform_latency[ss]
+                
         if could_transform and transform_time < cur_exe_time:
             print(f"find transformation {transform_qtype} better: {transform_time} < {merge_latency[ss]}")
             merge_latency[ss] = transform_time
             qtype = transform_qtype
+        elif merge_could_transform and merge_transform_time < cur_exe_time:
+            print(f"find transformation {merge_transform_qtype} better: {merge_transform_time} < {merge_latency[ss]}")
+            merge_latency[ss] = merge_transform_time
+            qtype = merge_transform_qtype
         return merge_latency[ss], qtype, cur_exe_time
     elif qtype == 'parallel':
         if ss in parallel_latency:
@@ -619,7 +639,8 @@ def ending_iterator(
 
 def dop(s: int,
         block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size, max_num_groups,
-        merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state) -> float:
+        merge_latency, parallel_latency, transform_latency, merge_transform_latency, cost_model, batch_size,
+        warmup, number, repeat, bar_state) -> float:
     """
     The main dynamic programming progress.
     """
@@ -642,15 +663,16 @@ def dop(s: int,
 
     dpv = 1e19
     s1 = sum(1 << u for u in iset if len(successor_dict[u]) == 1)
+    try_transform = "transform" in opt_type
     if "merge" in opt_type:
         for ss in iter_subset(s1):
             if check_merge(ss, idn) or check_transform(ss, idn):
                 stage = [[u] for u in state2iset(ss)], 'merge'
                 val1 = dop(s - ss, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                           max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number,
-                           repeat, bar_state)
+                           max_num_groups, merge_latency, parallel_latency, transform_latency, merge_transform_latency,
+                           cost_model, batch_size, warmup, number, repeat, bar_state)
                 val2, new_stage_type, original_time = latency(stage, block, merge_latency, parallel_latency, transform_latency,
-                            cost_model, idn, nid, batch_size, warmup, number, repeat)
+                            merge_transform_latency, cost_model, idn, nid, batch_size, warmup, number, repeat, try_transform)
                 if new_stage_type != "merge":
                     stage = [[u] for u in state2iset(ss)], new_stage_type
                 val = val1 + val2
@@ -685,9 +707,10 @@ def dop(s: int,
             stage = groups, 'parallel'
             consumed = sum(1 << u for u in itertools.chain(*stage[0]))
             val1 = dop(s - consumed, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
-                       max_num_groups, merge_latency, parallel_latency, transform_latency, cost_model, batch_size, warmup, number, repeat, bar_state)
+                       max_num_groups, merge_latency, parallel_latency, transform_latency, merge_transform_latency,
+                       cost_model, batch_size, warmup, number, repeat, bar_state)
             val2, new_stage_type, original_time = latency(stage, block, merge_latency, parallel_latency, transform_latency,
-                        cost_model, idn, nid, batch_size, warmup, number, repeat)
+                        cost_model, idn, nid, batch_size, warmup, number, repeat, try_transform)
             if new_stage_type != "parallel":
                 stage = groups, new_stage_type
             val = val1 + val2
@@ -771,7 +794,8 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             dst_node.bias = src_node.bias.copy()
 
     for stage_seqs, qtype in stage_list:
-        if qtype == 'merge' and len(stage_seqs) > 1:  # only merge convolutions
+        if "merge" in qtype and len(stage_seqs) > 1:  # only merge convolutions
+            use_merge_transform = "transform" in qtype
             inodes = list(itertools.chain(*stage_seqs))
             snodes = [nd for nd in [idn[i] for i in inodes] if isinstance(nd, Conv)]
             assert len(snodes) == len(inodes)
@@ -783,8 +807,18 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             groups = 1
             #  construct merged conv
             terms = get_input(snodes, block, nid, idn)
-            new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
-                            padding, groups, snodes[0].act, None)
+            if use_merge_transform:
+                # merge_transform_...
+                layouts = qtype.split("_", maxsplit=2)[2]
+                layouts = layouts.split("|")
+                assert len(layouts) == 1
+                input_layout, output_layout = layouts[0].split("_")
+                new_node = Transform_Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
+                                padding, groups, snodes[0].act, None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                new_node.update_transform_src_layout()
+            else:
+                new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
+                                padding, groups, snodes[0].act, None)
             new_node.inputs = get_new_terms(terms, new_node)
             new_node.infer_shape()
             if compute_weight:
