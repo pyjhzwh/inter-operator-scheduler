@@ -908,7 +908,10 @@ class Transform_Conv(Node):
     ):
         super().__init__(f"transform_conv_{conv_in_layout}_{conv_out_layout}",
             name, hint_name, inputs, output_shape, conv_out_layout)
-        self.transform_src_layout = inputs[0][0].node.layout
+        if self.inputs:
+            self.transform_src_layout = self.inputs[0][0].node.layout
+        else:
+            self.transform_src_layout = conv_in_layout
         self.transform_dst_layout = conv_in_layout
         
         self.kernel = kernel
@@ -927,6 +930,12 @@ class Transform_Conv(Node):
         #
         self.weight = None
         self.bias = None
+
+    def update_transform_src_layout(self):
+        if self.inputs:
+            self.transform_src_layout = self.inputs[0][0].node.layout
+        else:
+            self.transform_src_layout = self.transform_dst_layout
     
     @staticmethod
     def from_config(config, name2node):
@@ -969,9 +978,22 @@ class Transform_Conv(Node):
         }
         return config
 
+    def init_weights(self):
+        bound = np.sqrt(1) / np.sqrt(self.kernel[0] * self.kernel[1] * self.input_shape[0] // self.groups)
+        self.weight = np.random.uniform(low=-bound, high=bound, size=self.weight_shape).astype(np.float32)
+        self.bias = np.random.uniform(low=-bound, high=bound, size=self.bias_shape).astype(np.float32)
+
     @property
     def input_shape(self):
         return (sum(term[0].length for term in self.inputs), *self.inputs[0][0].node.output_shape[1:])
+
+    @property
+    def weight_shape(self):
+        return (self.out_channels, self.input_shape[0] // self.groups, *self.kernel)
+
+    @property
+    def bias_shape(self):
+        return self.out_channels,
 
     def infer_shape(self):
         self.output_shape = (
