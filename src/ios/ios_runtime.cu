@@ -767,7 +767,6 @@ struct NodeBase {
             }
         }
         else {
-            std::cout << this->name << " layout:" << this->layout << std::endl;
             assert(this->layout == "NHWC");
             int NHWC_stride_order[4] = {0, 2, 3, 1};
             int cnt = 1;
@@ -1606,23 +1605,20 @@ struct Graph {
             nb = transform + num_transform++;
         } else if(node_config["type"].asString() == "transform_conv_NCHW_NCHW") {
             assert(num_transform_conv_NCHW_NCHW < MAX_NUM_NODES);
-            transform_conv_NCHW_NCHW[num_transform].init(node_config, node_map);
+            transform_conv_NCHW_NCHW[num_transform_conv_NCHW_NCHW].init(node_config, node_map);
             nb = transform_conv_NCHW_NCHW + num_transform_conv_NCHW_NCHW++;
-        }
-         else if(node_config["type"].asString() == "transform_conv_NCHW_NHWC") {
+        } else if(node_config["type"].asString() == "transform_conv_NCHW_NHWC") {
             assert(num_transform_conv_NCHW_NHWC < MAX_NUM_NODES);
-            transform_conv_NCHW_NHWC[num_transform].init(node_config, node_map);
+            transform_conv_NCHW_NHWC[num_transform_conv_NCHW_NHWC].init(node_config, node_map);
             nb = transform_conv_NCHW_NHWC + num_transform_conv_NCHW_NHWC++;
-        }
-         else if(node_config["type"].asString() == "transform_conv_NHWC_NCHW") {
+        } else if(node_config["type"].asString() == "transform_conv_NHWC_NCHW") {
             assert(num_transform_conv_NHWC_NCHW < MAX_NUM_NODES);
-            transform_conv_NHWC_NCHW[num_transform].init(node_config, node_map);
-            nb = transform_conv_NHWC_NCHW + num_transform_conv_NCHW_NCHW++;
-        }
-         else if(node_config["type"].asString() == "transform_conv_NHWC_NHWC") {
+            transform_conv_NHWC_NCHW[num_transform_conv_NHWC_NCHW].init(node_config, node_map);
+            nb = transform_conv_NHWC_NCHW + num_transform_conv_NHWC_NCHW++;
+        } else if(node_config["type"].asString() == "transform_conv_NHWC_NHWC") {
             assert(num_transform_conv_NHWC_NHWC < MAX_NUM_NODES);
-            transform_conv_NHWC_NHWC[num_transform].init(node_config, node_map);
-            nb = transform_conv_NHWC_NHWC + num_transform_conv_NCHW_NCHW++;
+            transform_conv_NHWC_NHWC[num_transform_conv_NHWC_NHWC].init(node_config, node_map);
+            nb = transform_conv_NHWC_NHWC + num_transform_conv_NHWC_NHWC++;
         }
         else {
             FatalError("unsupported type " + node_config["type"].asString());
