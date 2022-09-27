@@ -365,7 +365,7 @@ def get_transform_latency(
                     candidate_op.append(conv)
             
             else:
-                candidate_op = [stage_seq[0]]
+                candidate_op = [idn[stage_seq[0]]]
             
             candidate_ops.append(candidate_op)
 
