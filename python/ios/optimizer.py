@@ -437,11 +437,11 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
                 else:
                     merge_could_transform, merge_transform_qtype, merge_transform_time = merge_transform_latency[ss]
                 
-        if could_transform and transform_time < cur_exe_time:
+        if could_transform and transform_time < merge_latency[ss]:
             print(f"find transformation {transform_qtype} better: {transform_time} < {merge_latency[ss]}")
             merge_latency[ss] = transform_time
             qtype = transform_qtype
-        elif merge_could_transform and merge_transform_time < cur_exe_time:
+        if merge_could_transform and merge_transform_time < merge_latency[ss]:
             print(f"find transformation {merge_transform_qtype} better: {merge_transform_time} < {merge_latency[ss]}")
             merge_latency[ss] = merge_transform_time
             qtype = merge_transform_qtype
@@ -458,7 +458,7 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
         cur_exe_time = float(
             np.mean(cost_model.get_stage_latency(stage_seqs_nodes, batch_size, warmup, number, repeat)))
         parallel_latency[ss] = cur_exe_time
-        if could_transform and transform_time < cur_exe_time:
+        if could_transform and transform_time < parallel_latency[ss]:
             print(f"find transformation {transform_qtype} better: {transform_time} < {parallel_latency[ss]}")
             parallel_latency[ss] = transform_time
             qtype = transform_qtype
@@ -710,7 +710,7 @@ def dop(s: int,
                        max_num_groups, merge_latency, parallel_latency, transform_latency, merge_transform_latency,
                        cost_model, batch_size, warmup, number, repeat, bar_state)
             val2, new_stage_type, original_time = latency(stage, block, merge_latency, parallel_latency, transform_latency,
-                        cost_model, idn, nid, batch_size, warmup, number, repeat, try_transform)
+                        merge_transform_latency, cost_model, idn, nid, batch_size, warmup, number, repeat, try_transform)
             if new_stage_type != "parallel":
                 stage = groups, new_stage_type
             val = val1 + val2
