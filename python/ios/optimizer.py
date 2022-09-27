@@ -321,7 +321,9 @@ def get_transform_latency(
             act = nd.act
             layouts = ["NCHW", "NHWC"]
             exe_time_layout_map = {}
-            # exe_time_list = []
+            # print(f"IN_C:{terms[0][0].node.output_shape[0]}, IN_H: {terms[0][0].node.output_shape[1]}, IN_W: {terms[0][0].node.output_shape[2]},",
+            #     f"OUT_C: {out_channels}, KERNEL_H: {kernel[0]}, KERNEL_W: {kernel[1]},",
+            #     f"STRIDE_H: {stride[0]}, STRIDE_W: {stride[1]}, PAD_H: {padding[0]}, PAD_W: {padding[1]}")
             for input_layout, output_layout in itertools.product(layouts, layouts):
                 conv = Transform_Conv('c', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
                             groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
@@ -333,9 +335,52 @@ def get_transform_latency(
 
             best_exe_time = sorted(exe_time_layout_map.keys())[0]
             best_layout = exe_time_layout_map[best_exe_time]
-            print(f"best_layout for Conv{nd.name}: {best_layout}")
+            # print(f"Conv{nd.name}, exe_time_layout_map", exe_time_layout_map)
 
             return True, "transform_"+best_layout, best_exe_time
+
+    elif len(stage_seqs) > 1:
+        candidate_ops = []
+        has_conv = False
+        for stage_seq in stage_seqs:
+            if(len(stage_seq)) > 1:
+                return False, "None", 100.0
+
+            if isinstance(idn[stage_seq[0]], Conv):
+                has_conv = True
+                nd = idn[stage_seq[0]]
+                terms = nd.inputs
+                out_channels = nd.out_channels
+                kernel = nd.kernel[0], nd.kernel[1]
+                stride = nd.stride[0], nd.stride[1]
+                padding = nd.padding[0], nd.padding[1]
+                groups = nd.groups
+                act = nd.act
+                layouts = ["NCHW", "NHWC"]
+                candidate_op = []
+                for input_layout, output_layout in itertools.product(layouts, layouts):
+                    conv = Transform_Conv('c', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                                groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                    conv.infer_shape()
+                    candidate_op.append(conv)
+            
+            else:
+                candidate_op = [stage_seq[0]]
+            
+            candidate_ops.append(candidate_op)
+
+        if not has_conv:
+            return False, "None", 100.0
+        exe_time_layout_map = {}
+        for stage_ops in itertools.product(*candidate_ops):
+            exe_time = float(
+                    np.mean(cost_model.get_stage_latency([stage_ops], batch_size, warmup, number, repeat)))
+            layout_identifier = '|'.join([f"{stage_op.conv_in_layout}_{stage_op.conv_out_layout}" for stage_op in stage_ops if isinstance(stage_op, Transform_Conv)])
+            exe_time_layout_map[exe_time] = layout_identifier
+
+        best_exe_time = sorted(exe_time_layout_map.keys())[0]
+        best_layout = exe_time_layout_map[best_exe_time]
+        return True, "transform_"+best_layout, best_exe_time
 
     return False, "None", 100.0
 
@@ -777,27 +822,39 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             inner_nodes.append(new_node)
             stages.append([[new_node.name]])
         elif "transform" in qtype:
-            assert len(stage_seqs) == 1 and len(stage_seqs[0]) == 1
-            assert isinstance(idn[stage_seqs[0][0]], Conv)
-            nd = idn[stage_seqs[0][0]]
-            terms = nd.inputs
-            out_channels = nd.out_channels
-            kernel = nd.kernel[0], nd.kernel[1]
-            stride = nd.stride[0], nd.stride[1]
-            padding = nd.padding[0], nd.padding[1]
-            groups = nd.groups
-            act = nd.act
-            _, input_layout, output_layout = qtype.split("_")
-            new_node_name = nd.name
-            new_node = Transform_Conv(new_node_name, new_node_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
-                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
-            if compute_weight:
-                copy_weights(new_node, nd)
-            new_node.infer_shape()
-            transform_conv_count += 1
-            out_dict[nd] = (new_node, 0, new_node.output_shape[0])
-            inner_nodes.append(new_node)
-            stages.append([[new_node.name]])
+            layouts = qtype.split("_", maxsplit=1)[1]
+            layouts = layouts.split("|")
+            conv_cnt = 0
+            seq_in_stage = []
+            for stage_seq in stage_seqs:
+                assert len(stage_seq) == 1
+                new_nodes = []
+                if isinstance(idn[stage_seq[0]], Conv):
+                    nd = idn[stage_seq[0]]
+                    terms = nd.inputs
+                    out_channels = nd.out_channels
+                    kernel = nd.kernel[0], nd.kernel[1]
+                    stride = nd.stride[0], nd.stride[1]
+                    padding = nd.padding[0], nd.padding[1]
+                    groups = nd.groups
+                    act = nd.act
+                    input_layout, output_layout = layouts[conv_cnt].split("_")
+                    new_node_name = nd.name
+                    new_node = Transform_Conv(new_node_name, new_node_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                                    groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                    if compute_weight:
+                        copy_weights(new_node, nd)
+                    new_node.infer_shape()
+                    transform_conv_count += 1
+                    out_dict[nd] = (new_node, 0, new_node.output_shape[0])
+                    new_nodes.append(new_node)
+                    conv_cnt += 1
+                else:
+                    new_nodes.append(nd)
+                inner_nodes.extend(new_nodes)
+                seq_in_stage.append([new_node.name for new_node in new_nodes])
+            assert conv_cnt == len(layouts)
+            stages.append(seq_in_stage)
         else:
             seq_in_stage = []
             for seq in stage_seqs:
