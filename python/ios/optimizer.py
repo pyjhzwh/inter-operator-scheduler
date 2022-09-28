@@ -315,11 +315,10 @@ def check_transform(s, idn) -> bool:
     return True
 
 
-def get_transform_latency(
+def get_transform_latency_single_conv(
     stage_seqs: List[List[int]], cost_model, idn, batch_size: int, warmup: int, number: int, repeat: int,
     transform_blacklist: Optional[List[List[int]]]=None
 ):
-    # consider single conv
     if len(stage_seqs) == 1 and len(stage_seqs[0]) == 1:
         if isinstance(idn[stage_seqs[0][0]], Conv):
             nd = idn[stage_seqs[0][0]]
@@ -354,12 +353,21 @@ def get_transform_latency(
 
             return True, "transform_"+best_layout, best_exe_time
 
+    return False, "None", 100.0
+
+
+def get_transform_latency(
+    stage_seqs: List[List[int]], cost_model, idn, batch_size: int, warmup: int, number: int, repeat: int,
+    transform_blacklist: Optional[List[List[int]]]=None
+):
+    # consider single conv
+    could_transform, transform_qtype, transform_time = get_transform_latency_single_conv(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
+    if could_transform:
+        return could_transform, transform_qtype, transform_time
     elif len(stage_seqs) > 1:
         candidate_ops = []
         has_conv = False
         for stage_seq in stage_seqs:
-            if(len(stage_seq)) > 1:
-                return False, "None", 100.0
             
             if len(stage_seq) == 1 and isinstance(idn[stage_seq[0]], Conv):
                 candidate_op = []
@@ -367,7 +375,8 @@ def get_transform_latency(
                 conv_key = get_conv_key(nd)
                 if transform_blacklist is not None and conv_key in transform_blacklist:
                     # print("skip transform_blacklist")
-                    candidate_ops.append([nd])
+                    candidate_ops.append([[nd]])
+                    continue
                 has_conv = True
                 terms = nd.inputs
                 out_channels = nd.out_channels
@@ -379,13 +388,13 @@ def get_transform_latency(
                 layouts = ["NCHW", "NHWC"]
                 
                 for input_layout, output_layout in itertools.product(layouts, layouts):
-                    conv = Transform_Conv('c', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                    conv = Transform_Conv(f'c{nd.name}', '', inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
                                 groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
                     conv.infer_shape()
-                    candidate_op.append(conv)
+                    candidate_op.append([conv])
             
             else:
-                candidate_op = [idn[stage_seq_i] for stage_seq_i in stage_seq]
+                candidate_op = [[idn[stage_seq_i] for stage_seq_i in stage_seq]]
             
             candidate_ops.append(candidate_op)
 
@@ -394,8 +403,14 @@ def get_transform_latency(
         exe_time_layout_map = {}
         for stage_ops in itertools.product(*candidate_ops):
             exe_time = float(
-                    np.mean(cost_model.get_stage_latency([stage_ops], batch_size, warmup, number, repeat)))
-            layout_identifier = '|'.join([f"{stage_op.conv_in_layout}_{stage_op.conv_out_layout}" for stage_op in stage_ops if isinstance(stage_op, Transform_Conv)])
+                    np.mean(cost_model.get_stage_latency(stage_ops, batch_size, warmup, number, repeat)))
+            layouts = []
+            for stage_op in stage_ops:
+                for op in stage_op:
+                    if isinstance(op, Transform_Conv):
+                        layouts.append(f"{op.conv_in_layout}_{op.conv_out_layout}")
+            layout_identifier = '|'.join(layouts)
+            
             exe_time_layout_map[exe_time] = layout_identifier
 
         best_exe_time = sorted(exe_time_layout_map.keys())[0]
@@ -403,7 +418,6 @@ def get_transform_latency(
         return True, "transform_"+best_layout, best_exe_time
 
     return False, "None", 100.0
-
 
 
 def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, transform_latency, merge_transform_latency, cost_model, idn, nid,
@@ -415,15 +429,16 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
     stage_seqs, qtype = stage
     ss = sum(1 << u for u in itertools.chain(*stage_seqs))
     could_transform, transform_qtype, transform_time = False, "None", 100.0
-    merge_could_transform, merge_transform_qtype, merge_transform_time = False, "None", 100.0
-    if try_transform:
-        if ss not in transform_latency:
-            transform_latency[ss] = get_transform_latency(
-                stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
-        could_transform, transform_qtype, transform_time = transform_latency[ss]
+    
     if qtype == 'merge':
+        merge_could_transform, merge_transform_qtype, merge_transform_time = False, "None", 100.0
         if ss in merge_latency:
             return merge_latency[ss], qtype, merge_latency[ss]
+        if try_transform:
+            if ss not in transform_latency:
+                transform_latency[ss] = get_transform_latency_single_conv(
+                    stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
+            could_transform, transform_qtype, transform_time = transform_latency[ss]
         snodes = state2nset(ss, idn)
         if len(stage_seqs) == 1:
             assert len(snodes) == 1
@@ -469,6 +484,11 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
     elif qtype == 'parallel':
         if ss in parallel_latency:
             return parallel_latency[ss], qtype, parallel_latency[ss]
+        if try_transform:
+            if ss not in transform_latency:
+                transform_latency[ss] = get_transform_latency(
+                    stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
+            could_transform, transform_qtype, transform_time = transform_latency[ss]
         stage_seqs_nodes = []
         for seq in stage_seqs:
             seq_nodes = []
@@ -883,7 +903,10 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             conv_cnt = 0
             seq_in_stage = []
             for stage_seq in stage_seqs:
-                assert len(stage_seq) == 1
+                # treat k > 0 as a whole group, ignore Conv transform it such group
+                # because we did not apply transform_conv in get_transformation_latency
+                if len(stage_seq) > 1:
+                    continue
                 new_nodes = []
                 if isinstance(idn[stage_seq[0]], Conv):
                     nd = idn[stage_seq[0]]
