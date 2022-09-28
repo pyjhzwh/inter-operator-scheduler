@@ -123,6 +123,14 @@ def optimize(graph: Graph,
         dp_info = None
         bar_state = None
 
+    try_transform = "transform" in opt_type
+    # transform_blacklist: None or List[List[Int]]
+    # A blacklist of conv keys that the default layout is best
+    transform_blacklist = None
+    if try_transform:
+        transform_blacklist = get_transform_conv_blacklist(graph)
+        print("transform_blacklist", transform_blacklist)
+
     for bindex, block in enumerate(graph.blocks):
         all_nodes = block.inner_nodes + [block.exit_node]
         node_parts = block.parts
@@ -167,13 +175,6 @@ def optimize(graph: Graph,
                 debug_dp_info['#operators'].append(len(npart))
                 debug_dp_info['meta'].append({0: 1})
 
-
-            try_transform = "transform" in opt_type
-            # transform_blacklist: None or List[List[Int]]
-            # A blacklist of conv keys that the default layout is best
-            transform_blacklist = None
-            if try_transform:
-                transform_blacklist = get_transform_conv_blacklist(graph)
 
             ustate = sum(1 << i for i in ipart)
             dop(ustate, block, chains, on_debug, debug_dp_info, idn, nid, dp, ep, opt_type, max_group_size,
