@@ -361,10 +361,8 @@ def get_transform_latency(
     transform_blacklist: Optional[List[List[int]]]=None
 ):
     # consider single conv
-    could_transform, transform_qtype, transform_time = get_transform_latency_single_conv(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
-    if could_transform:
-        return could_transform, transform_qtype, transform_time
-    elif len(stage_seqs) > 1:
+    could_transform_sc, transform_qtyp_sce, transform_time_sc = get_transform_latency_single_conv(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
+    if len(stage_seqs) > 1:
         candidate_ops = []
         has_conv = False
         for stage_seq in stage_seqs:
@@ -399,7 +397,7 @@ def get_transform_latency(
             candidate_ops.append(candidate_op)
 
         if not has_conv:
-            return False, "None", 100.0
+            return could_transform_sc, transform_qtyp_sce, transform_time_sc
         exe_time_layout_map = {}
         for stage_ops in itertools.product(*candidate_ops):
             exe_time = float(
@@ -415,9 +413,11 @@ def get_transform_latency(
 
         best_exe_time = sorted(exe_time_layout_map.keys())[0]
         best_layout = exe_time_layout_map[best_exe_time]
+        if could_transform_sc and transform_time_sc < best_exe_time:
+            return could_transform_sc, transform_qtyp_sce, transform_time_sc
         return True, "transform_"+best_layout, best_exe_time
 
-    return False, "None", 100.0
+    return could_transform_sc, transform_qtyp_sce, transform_time_sc
 
 
 def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_latency, transform_latency, merge_transform_latency, cost_model, idn, nid,
@@ -903,12 +903,39 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
             conv_cnt = 0
             seq_in_stage = []
             for stage_seq in stage_seqs:
+                new_nodes = []
                 # treat k > 0 as a whole group, ignore Conv transform it such group
                 # because we did not apply transform_conv in get_transformation_latency
-                if len(stage_seq) > 1:
-                    continue
-                new_nodes = []
-                if isinstance(idn[stage_seq[0]], Conv):
+                if len(stage_seq) > 1 or not isinstance(idn[stage_seq[0]], Conv):
+                    inodes = stage_seq
+                    snodes = [idn[i] for i in inodes]
+                    for snode in snodes:
+                        snode_config = snode.export_config()
+                        if isinstance(snode, Sequential):
+                            snode_config["nodes"][0]["inputs"] = []
+                            new_node = Node.from_config(snode_config, {})
+                            new_node.nodes[0].inputs = merge_inputs(
+                                get_new_terms(snode.nodes[0].inputs, new_node, do_sort=False))
+                            new_node.inputs = new_node.nodes[0].inputs
+                            if compute_weight:
+                                for dst_nd, src_nd in zip(new_node.nodes, snode.nodes):
+                                    copy_weights(dst_nd, src_nd)
+                            new_node.infer_shape()
+                            new_nodes.append(new_node)
+                            out_dict[snode] = (new_node, 0, new_node.output_shape[0])
+                        else:
+                            snode_config["inputs"] = []
+                            new_node = Node.from_config(snode_config, {})
+                            new_node.inputs = merge_inputs(get_new_terms(snode.inputs, new_node, do_sort=False))
+                            if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                                new_node.update_input_layout()
+                            if compute_weight:
+                                copy_weights(new_node, snode)
+                            new_node.infer_shape()
+                            new_nodes.append(new_node)
+                            out_dict[snode] = (new_node, 0, new_node.output_shape[0])
+                # new_nodes = []
+                elif isinstance(idn[stage_seq[0]], Conv):
                     nd = idn[stage_seq[0]]
                     terms = nd.inputs
                     out_channels = nd.out_channels
@@ -921,15 +948,14 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                     new_node_name = nd.name
                     new_node = Transform_Conv(new_node_name, new_node_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
                                     groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                    new_node.inputs = merge_inputs(get_new_terms(nd.inputs, new_node, do_sort=False))
                     if compute_weight:
                         copy_weights(new_node, nd)
                     new_node.infer_shape()
-                    transform_conv_count += 1
+                    # transform_conv_count += 1
                     out_dict[nd] = (new_node, 0, new_node.output_shape[0])
                     new_nodes.append(new_node)
                     conv_cnt += 1
-                else:
-                    new_nodes.append(nd)
                 inner_nodes.extend(new_nodes)
                 seq_in_stage.append([new_node.name for new_node in new_nodes])
             assert conv_cnt == len(layouts)
