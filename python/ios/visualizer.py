@@ -85,6 +85,20 @@ def get_node_label(node, stage):
             f'{node.name} @ {stage} #{flops:.1f}',
             f'{node.output_shape}',
         ])
+    elif isinstance(node, Transform):
+        label = "\n".join([
+            'Transform',
+            f'{node.src_layout}->{node.dst_layout}',
+            f'{node.hint_name} @ {stage} #{flops:.1f}',
+        ])
+    elif isinstance(node, Transform_Conv):
+        label = "\n".join([
+            'Transform_Conv',
+            f'{node.conv_in_layout}->{node.conv_out_layout}',
+            f'{node.hint_name} @ {stage} #{flops:.1f}',
+            f'kernel {node.kernel}',
+            f'{node.output_shape}'
+        ])
     else:
         raise ValueError
     return label
