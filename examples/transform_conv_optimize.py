@@ -11,6 +11,7 @@ def main(model_name: str, opt_type: str="dp_merge_parallel_transform"):
     graph.sequential_schedule()
     latency = ios.ios_runtime.graph_latency(graph, batch_size=1, repeat=6)
 
+    print("opt_type", opt_type)
     optimized_graph = ios.optimize(graph, batch_size=1, opt_type=opt_type)
     optimized_latency = ios.ios_runtime.graph_latency(optimized_graph, batch_size=1, repeat=6)
 
@@ -33,4 +34,4 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--opt_type", type=str, default="dp_merge_parallel_transform",
                         help="opt_type: dp_merge_parallel_transform or dp_merge_parallel")
     args = parser.parse_args()
-    main(args.model)
+    main(args.model, args.opt_type)

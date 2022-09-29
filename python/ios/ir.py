@@ -582,7 +582,9 @@ class Pool(Node):
     def readable_lines(self, indent) -> List[str]:
         namedict = {
             'max': 'MaxPool2d',
+            'max_pool': 'MaxPool2d',
             'avg': 'AvgPool2d',
+            'avg_pool': 'AvgPool2d',
             'global_max': 'GlobalMaxPool2d',
             'global_avg': 'GlobalAvgPool2d'
         }
