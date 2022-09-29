@@ -4,7 +4,7 @@ Utilities used to construct computation graph.
 Please refer the definition of inception v3, nasnet, randwire, and squeezenet for the definition of network.
 """
 from typing import Tuple, List
-from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph
+from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph, Transform_Conv
 
 name_index = 0
 
@@ -550,3 +550,60 @@ def transform(block: Block, inputs, dst_layout, is_exit=False):
     # else:
     #     block.inner_nodes.append(rel)
     return Value(transform, 0, transform.output_shape[0])
+
+
+def transform_conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu",
+           conv_in_layout="NCHW", conv_out_layout="NCHW", is_exit=False):
+    """
+    Add a convolution operator to the end of given block.
+
+    :param block: ios.Block
+        The block to add the operator
+
+    :param inputs: Sequence[Sequence[Value]]
+        The inputs of the convolution. 'inputs' contains a list of terms. A term contains a list of values. The values
+        in a term are added up. The terms are concatenated along with the channel dimension.
+
+    :param out_channels:
+        The number of output channels.
+
+    :param kernel: Tuple[int, int], default (1, 1)
+        The kernel size.
+
+    :param stride: Tuple[int, int], default (1, 1)
+        The stride size.
+
+    :param padding: Tuple[int, int], default (0, 0)
+
+    :param groups: int, default 1
+        The number of groups. It must be a common factor of the input channels and output channels.
+
+    :param act: str, default 'relu'
+        The activation applied to the output of convolution.
+
+    :param conv_in_layout: str
+        Input layout of convolution: "NCHW" or "NHWC"
+    
+    :param conv_out_layout: str
+        Output layout of convolution: "NCHW" or "NHWC"
+
+    :param is_exit: boolean, default False
+        Whether this operator is the exit operator of the block.
+
+    :return: Value
+        A value represents the output of the operator.
+    """
+    name = new_name()
+    conv = Transform_Conv(
+        name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, conv_in_layout, conv_out_layout
+    )
+    setup_op(conv, inputs, block, is_exit)
+    # conv.infer_shape()
+    # for ti, term in enumerate(inputs):
+    #     for vi, value in enumerate(term):
+    #         value.node.uses.append((conv, ti, vi))
+    # if is_exit:
+    #     block.exit_node = conv
+    # else:
+    #     block.inner_nodes.append(conv)
+    return Value(conv, 0, out_channels)
