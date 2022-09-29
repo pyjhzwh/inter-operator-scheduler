@@ -462,8 +462,8 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
                 nd for nd in snodes if (
                     isinstance(nd, Conv) or (
                         isinstance(nd, Transform_Conv)
-                        and nd.conv_in_layout == "NCHW"
-                        and nd.conv_out_layout == "NCHW"
+                        # and nd.conv_in_layout == "NCHW"
+                        # and nd.conv_out_layout == "NCHW"
                         )
                     )
             ]
