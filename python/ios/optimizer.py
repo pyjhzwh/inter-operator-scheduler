@@ -875,9 +875,14 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                 layouts = layouts.split("|")
                 assert len(layouts) == 1
                 input_layout, output_layout = layouts[0].split("_")
-                new_node = Transform_Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
-                                padding, groups, snodes[0].act, None, conv_in_layout=input_layout, conv_out_layout=output_layout)
-                new_node.update_transform_src_layout()
+                # NCHW_NCHW will use the normal Conv rather than Transform_Conv
+                if input_layout == "NCHW" and output_layout == "NCHW":
+                    new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
+                                    padding, groups, snodes[0].act, None, layout=output_layout)
+                else:
+                    new_node = Transform_Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
+                                    padding, groups, snodes[0].act, None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                    new_node.update_transform_src_layout()
             else:
                 new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
                                 padding, groups, snodes[0].act, None)
@@ -936,8 +941,13 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                         act = nd.act
                         input_layout, output_layout = layouts[conv_cnt].split("_")
                         new_node_name = nd.name
-                        new_node = Transform_Conv(new_node_name, new_node_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
-                                        groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                        # NCHW_NCHW will use the normal Conv rather than Transform_Conv
+                        if input_layout == "NCHW" and output_layout == "NCHW":
+                            new_node = Conv(nd.name, nd.hint_name, terms, out_channels, kernel, stride,
+                                padding, groups, act, None, layout=output_layout)
+                        else:
+                            new_node = Transform_Conv(nd.name, nd.hint_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
+                                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
                         new_node.inputs = merge_inputs(get_new_terms(nd.inputs, new_node, do_sort=False))
                         if compute_weight:
                             copy_weights(new_node, nd)

@@ -933,6 +933,11 @@ class Transform_Conv(Node):
         self.weight = None
         self.bias = None
 
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.input_layout = self.inputs[0][0].node.layout
+
+
     def update_transform_src_layout(self):
         if self.inputs:
             self.transform_src_layout = self.inputs[0][0].node.layout
