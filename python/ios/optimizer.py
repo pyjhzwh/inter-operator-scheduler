@@ -458,7 +458,15 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
                 np.mean(cost_model.get_stage_latency([[snodes[0]]], batch_size, warmup, number, repeat)))
             merge_latency[ss] = cur_exe_time
         else:
-            convs = [nd for nd in snodes if isinstance(nd, Conv)]
+            convs = [
+                nd for nd in snodes if (
+                    isinstance(nd, Conv) or (
+                        isinstance(nd, Transform_Conv)
+                        and nd.conv_in_layout == "NCHW"
+                        and nd.conv_out_layout == "NCHW"
+                        )
+                    )
+            ]
             assert len(convs) == len(snodes)
             terms = get_input(convs, block, nid, idn)
             out_channels = sum(nd.out_channels for nd in convs)
