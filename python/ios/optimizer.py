@@ -364,10 +364,8 @@ def get_transform_latency(
 ):
     # consider single conv
     could_transform_sc, transform_qtyp_sce, transform_time_sc = get_transform_latency_single_conv(stage_seqs, cost_model, idn, batch_size, warmup, number, repeat, transform_blacklist)
-    if len(stage_seqs) > 1:
+    if len(stage_seqs) > 1 or len(stage_seqs[0]) > 1:
         candidate_ops = []
-        other_candidate_ops = []
-        conv_candidate_ops = []
         conv_transform_cnt = 0
         for stage_seq in stage_seqs:
             other_candidate_op = []
@@ -385,7 +383,6 @@ def get_transform_latency(
                         other_candidate_op.append(nd)
                         continue
                     conv_transform_cnt += 1
-                    has_conv = True
                     terms = nd.inputs
                     out_channels = nd.out_channels
                     kernel = nd.kernel[0], nd.kernel[1]
@@ -480,7 +477,7 @@ def latency(stage: Tuple[List[List[int]], str], block, merge_latency, parallel_l
                 if ss not in merge_transform_latency:
                     tmp_stage_seqs = [[conv.name]]
                     tmp_idn = {conv.name: conv}
-                    merge_could_transform, merge_transform_qtype, merge_transform_time = get_transform_latency(
+                    merge_could_transform, merge_transform_qtype, merge_transform_time = get_transform_latency_single_conv(
                         tmp_stage_seqs, cost_model, tmp_idn, batch_size, warmup, number, repeat, transform_blacklist)
                     merge_transform_qtype = "merge_" + merge_transform_qtype
                     merge_transform_latency[ss] = merge_could_transform, merge_transform_qtype, merge_transform_time
