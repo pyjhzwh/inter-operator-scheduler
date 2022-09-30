@@ -7,6 +7,16 @@ cfgs = {
     'E': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M'],
 }
 
+layouts = {
+    'A': [
+        ["NHWC", "NCHW"],
+        ["NCHW", "NCHW"],
+        ["NCHW", "NCHW"], ["NCHW", "NHWC"],
+        ["NHWC", "NCHW"], ["NCHW", "NHWC"],
+        ["NHWC", "NCHW"], ["NCHW", "NHWC"]
+    ]
+}
+
 
 def vgg_net(cfg, name):
     reset_name()
@@ -26,6 +36,31 @@ def vgg_net(cfg, name):
     return graph
 
 
+def vgg_net_opt_layout(cfg, layout, name):
+    reset_name()
+    cnt = 0
+    pv = placeholder(output_shape=(3, 224, 224), layout=layout[cnt][0])
+    block = Block(pv.node, None, [], None)
+
+    v = pv
+    prev_layout = "NCHW"
+    for c in cfg:
+        if c == 'M':
+            v = pool2d(block, [[v]], pool_type='max', kernel=(2, 2), stride=(2, 2), layout=prev_layout)
+        else:
+            conv_in_layout=layout[cnt][0]
+            conv_out_layout=layout[cnt][1]
+            v = transform_conv2d(
+                block, [[v]], c, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act="relu",
+                conv_in_layout=conv_in_layout, conv_out_layout=conv_out_layout
+            )
+            prev_layout = conv_out_layout
+            cnt += 1
+    v = pool2d(block, [[v]], pool_type='global_avg', is_exit=True, layout=prev_layout)
+    graph = Graph(name, pv.node, [block])
+    graph.init_weights()
+    return graph
+
 def vgg_11():
     return vgg_net(cfgs['A'], 'vgg_11')
 
@@ -40,3 +75,7 @@ def vgg_16():
 
 def vgg_19():
     return vgg_net(cfgs['E'], 'vgg_19')
+
+
+def vgg_11_opt_layout():
+    return vgg_net_opt_layout(cfgs["A"], layouts["A"], "vgg_11")
