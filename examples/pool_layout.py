@@ -24,7 +24,7 @@ def create_pool_graph_given_layout(param: list, layout: str):
     block = ios.Block(enter_node=v.node)
     ios.pool2d(
         block, inputs=[[v]], pool_type=param[3], kernel=param[4:6],
-        stride=param[6:8], padding=param[8:10], layout=layout, is_exit=True
+        stride=param[6:8], padding=param[8:10], is_exit=True
     )
     graph = ios.Graph(name="demo", input=v.node, blocks=[block])
     graph.init_weights()

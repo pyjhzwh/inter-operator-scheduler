@@ -33,7 +33,7 @@ def create_elem_graph_given_layout(param: list, layout: str):
     v = ios.placeholder(output_shape=(param[:3]), layout=layout)
     # v2 = ios.placeholder(output_shape=(param[:3]), layout=layout)
     block = ios.Block(enter_node=v.node)
-    ios.element(block, inputs=[[v, v]], op_type=param[3], layout=layout, is_exit=True)
+    ios.element(block, inputs=[[v, v]], op_type=param[3], is_exit=True)
     graph = ios.Graph(name="demo", input=v.node, blocks=[block])
     graph.init_weights()
     return graph
@@ -43,9 +43,9 @@ def create_act_graph_given_layout(param: list, layout: str):
     block = ios.Block(enter_node=v.node)
     op_type = param[3]
     if op_type == "relu":
-        ios.relu(block, inputs=[[v]], is_exit=True, layout=layout)
+        ios.relu(block, inputs=[[v]], is_exit=True)
     else:
-        ios.activation(block, inputs=[[v]], act_type=param[3], inplace=True, is_exit=True, layout=layout)
+        ios.activation(block, inputs=[[v]], act_type=param[3], inplace=True, is_exit=True)
     graph = ios.Graph(name="demo", input=v.node, blocks=[block])
     graph.init_weights()
     return graph
@@ -101,7 +101,6 @@ def main(model_name: str):
         act_keys = []
         for node in elem_nodes:
             elem_key = get_elem_key(node)
-            print("elem_key", elem_key)
             if elem_key not in elem_keys:
                 latency = elem_latency(elem_key)
                 csv_writer.writerow([*elem_key, *latency])
@@ -109,7 +108,6 @@ def main(model_name: str):
 
         for node in act_nodes:
             act_key = get_act_key(node)
-            print("act_key", act_key)
             if act_key not in act_keys:
                 latency = act_latency(act_key)
                 csv_writer.writerow([*act_key, *latency])
