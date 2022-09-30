@@ -3,6 +3,6 @@ from .randwire import randwire_large
 from .squeezenet import squeezenet
 from .nasnet import nasnet_large
 from .vgg import vgg_11, vgg_13, vgg_16, vgg_19
-from .vgg import vgg_11_opt_layout
+from .vgg import vgg_11_opt_layout, vgg_13_opt_layout
 from .alexnet import alexnet
 from .resnet import resnet18, resnet34, resnet50
