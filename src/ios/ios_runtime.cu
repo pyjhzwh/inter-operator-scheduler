@@ -448,7 +448,7 @@ struct ActivationOP {
     int output_h;
     int output_w;
 
-
+    cudnnTensorFormat_t input_layout;
     cudnnTensorDescriptor_t inputTensor;
     cudnnActivationDescriptor_t actiDesc;
 
@@ -456,7 +456,9 @@ struct ActivationOP {
     data_type *output_data;
     CudnnContext *context;
 
-    void init(int batch_size, int in_channels, int input_h, int input_w, int act_type, bool inplace) {
+    void init(
+        int batch_size, int in_channels, int input_h, int input_w, int act_type, bool inplace, string input_layout
+    ) {
         this->batch_size = batch_size;
         this->in_channels = in_channels;
         this->input_h = input_h;
@@ -467,13 +469,14 @@ struct ActivationOP {
         this->output_h = input_h;
         this->output_w = input_w;
         this->context = nullptr;
+        this->input_layout = getCudNNLayoutFromStr(input_layout);
     }
     void map(data_type *input_data, CudnnContext *context) {
         // create descriptors
         this->input_data = input_data;
         this->context = context;
         checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor));
-        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, cudnn_data_format, cudnn_data_type, batch_size, in_channels, input_h, input_w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
         checkCUDNN(cudnnCreateActivationDescriptor(&actiDesc));
         cudnnActivationMode_t mode;
         switch (act_type) {
@@ -522,6 +525,7 @@ struct ElementOP {
     int h;
     int w;
     int op_type;
+    cudnnTensorFormat_t input_layout;
 
     cudnnTensorDescriptor_t inputTensor;
     cudnnOpTensorDescriptor_t opDesc;
@@ -531,13 +535,14 @@ struct ElementOP {
     data_type *output_data;
     CudnnContext *context;
 
-    void init(int batch_size, int channels, int h, int w, int op_type) {
+    void init(int batch_size, int channels, int h, int w, int op_type, string input_layout) {
         this->batch_size = batch_size;
         this->channels = channels;
         this->h = h;
         this->w = w;
         this->op_type = op_type;
         this->context = nullptr;
+        this->input_layout = getCudNNLayoutFromStr(input_layout);
     }
     void map(data_type *input_a, data_type *input_b, CudnnContext *context) {
         this->input_a = input_a;
@@ -548,7 +553,7 @@ struct ElementOP {
 
         checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor));
         checkCUDNN(cudnnCreateOpTensorDescriptor(&opDesc));
-        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, cudnn_data_format, cudnn_data_type, batch_size, channels, h, w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, channels, h, w));
         cudnnOpTensorOp_t opType;
         if(op_type == MUL)
             opType = CUDNN_OP_TENSOR_MUL;
@@ -590,6 +595,8 @@ struct PoolOP {
     int output_w;
     int pool_type;
 
+    cudnnTensorFormat_t input_layout;
+
     cudnnTensorDescriptor_t inputTensor, outputTensor;
     cudnnPoolingDescriptor_t poolDesc;
 
@@ -598,7 +605,7 @@ struct PoolOP {
     data_type *input_data;
     data_type *output_data;
 
-    void init(int batch_size, int in_channels, int input_h, int input_w, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int pool_type) {
+    void init(int batch_size, int in_channels, int input_h, int input_w, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int pool_type, string input_layout) {
         this->batch_size = batch_size;
         this->in_channels = in_channels;
         this->input_h = input_h;
@@ -610,6 +617,7 @@ struct PoolOP {
         this->padding_h = padding_h;
         this->padding_w = padding_w;
         this->pool_type = pool_type;
+        this->input_layout = getCudNNLayoutFromStr(input_layout);
 
         this->out_channels = in_channels;
         this->output_h = 1 + (input_h - kernel_h + 2 * padding_h) / stride_h;
@@ -622,7 +630,7 @@ struct PoolOP {
         checkCUDNN(cudnnCreateTensorDescriptor(&outputTensor));
         checkCUDNN(cudnnCreatePoolingDescriptor(&poolDesc));
         // set descriptors
-        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, cudnn_data_format,
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout,
                                               cudnn_data_type, batch_size, in_channels, input_h, input_w));
         cudnnPoolingMode_t mode;
         if(pool_type == MAX_POOL) {
@@ -639,7 +647,7 @@ struct PoolOP {
         assert(c == out_channels);
         assert(h == output_h);
         assert(w == output_w);
-        checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, cudnn_data_format, cudnn_data_type, n, c, h, w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, input_layout, cudnn_data_type, n, c, h, w));
 
         size_t size = sizeof(data_type) * batch_size * out_channels * output_h * output_w;
         checkCUDA(cudaMalloc(&output_data, size));
@@ -1283,7 +1291,9 @@ struct Element: NodeBase {
         }
         this->inputs[0].init(inputs_config[0][0], node_map);
         this->inputs[1].init(inputs_config[0][1], node_map);
-        elem_op.init(inputs[0].batch_size, inputs[0].out_channels, inputs[0].output_h, inputs[0].output_w, op_type);
+        elem_op.init(
+            inputs[0].batch_size, inputs[0].out_channels, inputs[0].output_h, inputs[0].output_w, op_type, inputs[0].layout
+        );
         this->context = nullptr;
         this->output_data = nullptr;
         this->batch_size = inputs[0].batch_size;
@@ -1357,7 +1367,10 @@ struct Activation: NodeBase {
         else
             FatalError("unsupported activation mode " + act_str);
         assert(config.isMember("inplace"));
-        act.init(input.batch_size, input.out_channels, input.output_h, input.output_w, act_type, config["inplace"].asBool());
+        act.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w, act_type,
+            config["inplace"].asBool(), input.layout
+        );
         this->batch_size = act.batch_size;
         this->out_channels = act.out_channels;
         this->output_h = act.output_h;
@@ -1389,7 +1402,10 @@ struct Relu: NodeBase {
     void init(const Json::Value &config, const std::map<string,NodeBase*> &node_map) {
         name = config["name"].asString();
         input.init(config["inputs"], node_map);
-        act_relu.init(input.batch_size, input.out_channels, input.output_h, input.output_w, ActivationOP::RELU, false);
+        act_relu.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w, ActivationOP::RELU,
+            false, input.layout
+        );
         this->batch_size = act_relu.batch_size;
         this->out_channels = act_relu.out_channels;
         this->output_h = act_relu.output_h;
@@ -1469,7 +1485,9 @@ struct Pool: NodeBase {
             padding_h = config["padding"][0].asInt();
             padding_w = config["padding"][1].asInt();
         }
-        pool_op.init(input.batch_size, input.out_channels, input.output_h, input.output_w, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, pool_type);
+        pool_op.init(
+            input.batch_size, input.out_channels, input.output_h, input.output_w, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, pool_type, input.layout
+        );
         pool_op.name = name;
 
         this->batch_size = pool_op.batch_size;
