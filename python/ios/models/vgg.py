@@ -71,7 +71,7 @@ def vgg_net_opt_layout(cfg, layout, name):
             )
             prev_layout = conv_out_layout
             cnt += 1
-    v = pool2d(block, [[v]], pool_type='global_avg', is_exit=True, layout=prev_layout)
+    v = pool2d(block, [[v]], pool_type='global_avg', is_exit=True)
     graph = Graph(name, pv.node, [block])
     graph.init_weights()
     return graph
