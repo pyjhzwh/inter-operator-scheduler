@@ -54,7 +54,7 @@ def vgg_net_opt_layout(cfg, layout, name):
     prev_layout = layout[cnt][0]
     for c in cfg:
         if c == 'M':
-            v = pool2d(block, [[v]], pool_type='max', kernel=(2, 2), stride=(2, 2), layout=prev_layout)
+            v = pool2d(block, [[v]], pool_type='max', kernel=(2, 2), stride=(2, 2))
         else:
             conv_in_layout= layout[cnt][0]
             conv_out_layout = layout[cnt][1]

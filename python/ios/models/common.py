@@ -133,7 +133,7 @@ def rwconv2d(block: Block, inputs, out_channels, stride=(1, 1), is_exit=False, l
     return relu_sep_conv(block, inputs, out_channels, (3, 3), stride, (1, 1), is_exit, layout)
 
 
-def identity(block: Block, inputs, is_exit=False, layout="NCHW"):
+def identity(block: Block, inputs, is_exit=False):
     """
     Add Identity operator at the end of given block. Because the inputs can can do the addition and concatenation
     operation, this operator works as addition and concatenation.
@@ -152,7 +152,7 @@ def identity(block: Block, inputs, is_exit=False, layout="NCHW"):
         A value represents the output of the operator.
     """
     name = new_name()
-    ident = Identity(name, name, inputs, None, layout)
+    ident = Identity(name, name, inputs, None)
     setup_op(ident, inputs, block, is_exit)
     # ident.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -165,7 +165,7 @@ def identity(block: Block, inputs, is_exit=False, layout="NCHW"):
     return Value(ident, 0, ident.output_shape[0])
 
 
-def relu(block: Block, inputs, is_exit=False, layout="NCHW"):
+def relu(block: Block, inputs, is_exit=False):
     """
     Add a Relu activation at the end of given block. This function is equivalent to activation(act_type='relu').
 
@@ -183,7 +183,7 @@ def relu(block: Block, inputs, is_exit=False, layout="NCHW"):
         A value represents the output of the operator.
     """
     name = new_name()
-    rel = Relu(name, name, inputs, None, layout)
+    rel = Relu(name, name, inputs, None)
     setup_op(rel, inputs, block, is_exit)
     # rel.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -196,7 +196,7 @@ def relu(block: Block, inputs, is_exit=False, layout="NCHW"):
     return Value(rel, 0, rel.output_shape[0])
 
 
-def activation(block: Block, inputs, act_type, inplace, is_exit=False, layout="NCHW"):
+def activation(block: Block, inputs, act_type, inplace, is_exit=False):
     """
     Add an activation at the end of given block. This function is equivalent to activation(act_type='relu').
 
@@ -220,7 +220,7 @@ def activation(block: Block, inputs, act_type, inplace, is_exit=False, layout="N
         A value represents the output of the operator.
     """
     name = new_name()
-    rel = Activation(name, name, inputs, act_type=act_type, inplace=inplace, output_shape=None, layout=layout)
+    rel = Activation(name, name, inputs, act_type=act_type, inplace=inplace, output_shape=None)
     setup_op(rel, inputs, block, is_exit)
     # rel.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -233,25 +233,25 @@ def activation(block: Block, inputs, act_type, inplace, is_exit=False, layout="N
     return Value(rel, 0, rel.output_shape[0])
 
 
-def multiply(block: Block, inputs, is_exit=False, layout="NCHW"):
+def multiply(block: Block, inputs, is_exit=False):
     """
     Add an element-wise multiplication operator at the end of block.
 
     More information please refer to ios.element.
     """
-    return element(block, inputs, op_type='mul', is_exit=is_exit, layout=layout)
+    return element(block, inputs, op_type='mul', is_exit=is_exit)
 
 
-def addition(block: Block, inputs, is_exit=False, layout="NCHW"):
+def addition(block: Block, inputs, is_exit=False):
     """
     Add an element-wise addition operator at the end of block.
 
     More information please refer to ios.element.
     """
-    return element(block, inputs, op_type='add', is_exit=is_exit, layout=layout)
+    return element(block, inputs, op_type='add', is_exit=is_exit)
 
 
-def element(block: Block, inputs, op_type, is_exit=False, layout="NCHW"):
+def element(block: Block, inputs, op_type, is_exit=False):
     """
     Add an element-wise operator at the end of given block.
 
@@ -272,7 +272,7 @@ def element(block: Block, inputs, op_type, is_exit=False, layout="NCHW"):
         A value represents the output of the operator.
     """
     name = new_name()
-    rel = Element(name, name, inputs, op_type=op_type, output_shape=None, layout=layout)
+    rel = Element(name, name, inputs, op_type=op_type, output_shape=None)
     setup_op(rel, inputs, block, is_exit)
     # rel.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -285,16 +285,16 @@ def element(block: Block, inputs, op_type, is_exit=False, layout="NCHW"):
     return Value(rel, 0, rel.output_shape[0])
 
 
-def sigmoid(block: Block, inputs, inplace=False, is_exit=False, layout="NCHW"):
+def sigmoid(block: Block, inputs, inplace=False, is_exit=False):
     """
     Add a sigmoid activation operator at the end of given block.
 
     More information please refer to ios.activation.
     """
-    return activation(block, inputs, 'sigmoid', inplace, is_exit, layout=layout)
+    return activation(block, inputs, 'sigmoid', inplace, is_exit)
 
 
-def tanh(block: Block, inputs, inplace=False, is_exit=False, layout="NCHW"):
+def tanh(block: Block, inputs, inplace=False, is_exit=False):
     """
     Add a tanh activation operator at the end of given block.
 
@@ -303,7 +303,7 @@ def tanh(block: Block, inputs, inplace=False, is_exit=False, layout="NCHW"):
     return activation(block, inputs, 'tanh', inplace, is_exit)
 
 
-def pool2d(block: Block, inputs, pool_type, kernel=(1, 1), stride=(1, 1), padding=(0, 0), is_exit=False, layout="NCHW"):
+def pool2d(block: Block, inputs, pool_type, kernel=(1, 1), stride=(1, 1), padding=(0, 0), is_exit=False):
     """
     Add a pooling operator at the end of given block.
 
@@ -333,7 +333,7 @@ def pool2d(block: Block, inputs, pool_type, kernel=(1, 1), stride=(1, 1), paddin
         A value represents the output of the operator.
     """
     name = new_name()
-    pool = Pool(name, name, inputs, pool_type, kernel, stride, padding, None, layout)
+    pool = Pool(name, name, inputs, pool_type, kernel, stride, padding, None)
     setup_op(pool, inputs, block, is_exit)
     # pool.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -346,7 +346,7 @@ def pool2d(block: Block, inputs, pool_type, kernel=(1, 1), stride=(1, 1), paddin
     return Value(pool, 0, pool.output_shape[0])
 
 
-def sequential(block: Block, hint_name, nodes: List[Node], is_exit=False, layout="NCHW"):
+def sequential(block: Block, hint_name, nodes: List[Node], is_exit=False):
     """
     Add a sequential compound operator at the end of given block. The compound operator contains a sequence of operators
     that would be executed sequentially.
@@ -372,7 +372,7 @@ def sequential(block: Block, hint_name, nodes: List[Node], is_exit=False, layout
     for i in range(len(nodes) - 1):
         nodes[i].infer_shape()
         nodes[i + 1].inputs = [[Value(nodes[i], 0, nodes[i].output_shape[0])]]
-    seq = Sequential(name, hint_name, nodes, None, layout)
+    seq = Sequential(name, hint_name, nodes, None)
     seq.infer_shape()
     for ti, term in enumerate(nodes[0].inputs):
         for vi, value in enumerate(term):
@@ -457,7 +457,7 @@ def relu_sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel,
     names = [new_name(), new_name(), new_name()]
     in_channels = sum(term[0].node.output_shape[0] for term in inputs)
     nodes = [
-        Relu(names[0], names[0], inputs, None, layout=layout),
+        Relu(names[0], names[0], inputs, None),
         Conv(names[1], names[1], None, out_channels=in_channels, kernel=kernel, stride=stride, padding=padding,
              groups=in_channels, act="identity", output_shape=None, layout=layout),
         Conv(names[2], names[2], None, out_channels=out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0),
@@ -498,7 +498,7 @@ def relu_conv(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), 
     """
     names = [new_name(), new_name()]
     nodes = [
-        Relu(names[0], names[0], inputs, None, layout=layout),
+        Relu(names[0], names[0], inputs, None),
         Conv(names[1], names[1], None, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
              groups=groups, act="identity", output_shape=None, layout=layout),
     ]

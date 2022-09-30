@@ -428,8 +428,8 @@ class Sequential(Node):
     """
     __slots__ = ['nodes']
 
-    def __init__(self, name, hint_name, nodes: List[Node], output_shape, layout="NCHW"):
-        super().__init__('sequential', name, hint_name, nodes[0].inputs, output_shape, layout)
+    def __init__(self, name, hint_name, nodes: List[Node], output_shape):
+        super().__init__('sequential', name, hint_name, nodes[0].inputs, output_shape, nodes[-1].layout)
         self.nodes = nodes
 
     @staticmethod
@@ -508,8 +508,8 @@ class Pool(Node):
     #       max, avg, global_max, global_avg
     #
 
-    def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape, layout="NCHW"):
-        super().__init__('pool', name, hint_name, inputs, output_shape, layout)
+    def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape):
+        super().__init__('pool', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
         self.name = name
         self.pool_type = pool_type
         self.kernel = kernel
@@ -588,7 +588,7 @@ class Pool(Node):
             'global_max': 'GlobalMaxPool2d',
             'global_avg': 'GlobalAvgPool2d'
         }
-        return [f'[{self.hint_name}]{namedict[self.pool_type]}({self.input_readable_str()})']
+        return [f'[{self.hint_name}]{namedict[self.pool_type]}[{self.layout}]({self.input_readable_str()})']
 
 
 class Element(Node):
@@ -603,8 +603,8 @@ class Element(Node):
     """
     __slots__ = ['op_type']
 
-    def __init__(self, name, hint_name, inputs, op_type, output_shape, layout="NCHW"):
-        super().__init__("element", name, hint_name, inputs, output_shape, layout)
+    def __init__(self, name, hint_name, inputs, op_type, output_shape):
+        super().__init__("element", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
         self.op_type: str = op_type
 
     @staticmethod
@@ -655,15 +655,15 @@ class Element(Node):
             merge_op = '*'
         else:
             merge_op = '+'
-        return [f'[{self.hint_name}]{self.input_readable_str(merge_op)}']
+        return [f'[{self.hint_name}][{self.layout}]{self.input_readable_str(merge_op)}']
 
 
 class Identity(Node):
     """
     Identity operator. It can also works as the Concat operator when there are multiple terms in the inputs.
     """
-    def __init__(self, name, hint_name, inputs, output_shape, layout="NCHW"):
-        super().__init__("identity", name, hint_name, inputs, output_shape, layout)
+    def __init__(self, name, hint_name, inputs, output_shape):
+        super().__init__("identity", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
 
     @staticmethod
     def from_config(config, name2node):
@@ -710,7 +710,7 @@ class Identity(Node):
         input_str = self.input_readable_str()
         if input_str[0] != 'C':
             input_str = '(' + input_str + ')'
-        return [f'[{self.hint_name}]{input_str}']
+        return [f'[{self.hint_name}][{self.layout}]{input_str}']
 
 
 class Activation(Node):
@@ -726,8 +726,8 @@ class Activation(Node):
     """
     __slots__ = ['act_type', 'inplace']
 
-    def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape, layout="NCHW"):
-        super().__init__('activation', name, hint_name, inputs, output_shape, layout)
+    def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape):
+        super().__init__('activation', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
         self.act_type = act_type
         self.inplace = inplace
 
@@ -777,15 +777,15 @@ class Activation(Node):
         return 1 + self.input_kernels()
 
     def readable_lines(self, indent) -> List[str]:
-        return [f'{self.act_type.capitalize()}@{self.hint_name}({self.input_readable_str()})']
+        return [f'{self.act_type.capitalize()}@{self.hint_name}[{self.layout}]({self.input_readable_str()})']
 
 
 class Relu(Node):
     """
     Relu activation operator. It is equivalent to Activation(act_type='relu').
     """
-    def __init__(self, name, hint_name, inputs, output_shape, layout="NCHW"):
-        super().__init__('relu', name, hint_name, inputs, output_shape, layout)
+    def __init__(self, name, hint_name, inputs, output_shape):
+        super().__init__('relu', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
 
     @staticmethod
     def from_config(config, name2node):
@@ -829,7 +829,7 @@ class Relu(Node):
         return 1 + self.input_kernels()
 
     def readable_lines(self, indent) -> List[str]:
-        return [f'[{self.hint_name}]Relu({self.input_readable_str()})']
+        return [f'[{self.hint_name}]Relu[{self.layout}]({self.input_readable_str()})']
 
 
 class Transform(Node):
