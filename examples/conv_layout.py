@@ -67,9 +67,9 @@ def main(model_name: str, transform_conv: bool):
                 conv_nodes.append(node)
 
     if transform_conv:
-        output_file = f"data/transform_{model_name}.csv"
+        output_file = f"data/transform_conv_{model_name}.csv"
     else:
-        output_file = f"data/{model_name}.csv"
+        output_file = f"data/conv_{model_name}.csv"
     with open(output_file, "w", newline="\n") as f:
         csv_writer = csv.writer(f, delimiter=",")
         csv_writer.writerow(

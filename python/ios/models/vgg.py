@@ -11,9 +11,9 @@ layouts = {
     'A': [
         ["NHWC", "NCHW"],
         ["NCHW", "NCHW"],
+        ["NCHW", "NHWC"], ["NHWC", "NCHW"],
         ["NCHW", "NCHW"], ["NCHW", "NHWC"],
-        ["NHWC", "NCHW"], ["NCHW", "NHWC"],
-        ["NHWC", "NCHW"], ["NCHW", "NHWC"]
+        ["NHWC", "NCHW"], ["NCHW", "NCHW"]
     ]
 }
 
@@ -50,9 +50,16 @@ def vgg_net_opt_layout(cfg, layout, name):
         else:
             conv_in_layout=layout[cnt][0]
             conv_out_layout=layout[cnt][1]
-            v = transform_conv2d(
+            # v = transform_conv2d(
+            #     block, [[v]], c, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act="relu",
+            #     conv_in_layout=conv_in_layout, conv_out_layout=conv_out_layout
+            # )
+            if prev_layout != conv_in_layout:
+                print(f"transform {prev_layout}->{conv_in_layout}")
+                v = transform(block, [[v]], dst_layout = conv_in_layout)
+            v = conv2d(
                 block, [[v]], c, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act="relu",
-                conv_in_layout=conv_in_layout, conv_out_layout=conv_out_layout
+                layout=conv_out_layout
             )
             prev_layout = conv_out_layout
             cnt += 1
