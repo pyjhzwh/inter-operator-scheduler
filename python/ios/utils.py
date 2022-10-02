@@ -39,7 +39,7 @@ def get_conv_key(node: Node):
 def create_conv_graph_given_layout(conv_param: list, input_layout: str, output_layout: str):
     v = ios.placeholder(output_shape=(conv_param[:3]), layout=input_layout)
     block = ios.Block(enter_node=v.node)
-    ios.conv2d(block, inputs=[[v]], out_channels=conv_param[0],
+    ios.conv2d(block, inputs=[[v]], out_channels=conv_param[3],
         kernel=(conv_param[5:7]), stride=(conv_param[7:9]), padding=(conv_param[9:11]),
         act=conv_param[11], layout=output_layout, is_exit=True)
     
