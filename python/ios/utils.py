@@ -25,6 +25,9 @@ def iter_subset(s: int, include_emtpy_set=False):
     if include_emtpy_set:
         yield 0
 
+"""
+Convolution
+"""
 
 def get_conv_key(node: Node):
     assert(len(node.weight_shape) == 4)
@@ -80,3 +83,36 @@ def get_transform_conv_blacklist(graph: Graph):
                 blacklist.append(conv_key)
 
     return blacklist
+
+"""
+Transform layout
+"""
+def get_transform_key(node: Transform):
+    assert(len(node.weight_shape) == 4)
+    assert(len(node.stride) == 2)
+    assert(len(node.padding) == 2)
+    assert(node.weight_shape[1] == node.input_shape[0]) # in_c matches
+    param = [node.output_shape[0], node.output_shape[1], node.output_shape[2]]
+    return param
+
+def create_transform_graph_given_layout(transform_param: list, input_layout: str, output_layout: str):
+    # default layout is NCHW
+    v = ios.placeholder(output_shape=(transform_param[:3]), layout=input_layout)
+    block = ios.Block(enter_node=v.node)
+    ios.transform(block, inputs=[[v]], dst_layout=output_layout, is_exit=True)
+    
+    graph = ios.Graph(name="demo", input=v.node, blocks=[block])
+    graph.init_weights()
+    return graph
+
+def transform_latency(transform_param: list):
+    layouts = [["NCHW", "NHWC"], ["NHWC", "NCHW"]]
+    latencies = []
+    for input_layout, output_layout in layouts:
+        graph = create_transform_graph_given_layout(transform_param, input_layout, output_layout)
+
+        graph.sequential_schedule()
+        seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, repeat=10)
+        latencies.append(np.mean(seq_latency))
+
+    return latencies
