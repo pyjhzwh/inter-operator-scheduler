@@ -63,7 +63,7 @@ def dp_best_layout(conv_latencies, transform_latencies):
 
 
 id2layout = {0: ["NCHW", "NCHW"], 1: ["NCHW", "NHWC"], 2: ["NHWC", "NCHW"], 3: ["NHWC", "NHWC"]}
-model2char = {"vgg_11": "A", "vgg_13": "B", "vgg_16": "C", "vgg_19": "D"}
+model2char = {"vgg_11": "A", "vgg_13": "B", "vgg_16": "D", "vgg_19": "E"}
 cfgs = {
     'A': [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
     'B': [64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
@@ -72,7 +72,7 @@ cfgs = {
 }
 
 
-def create_vgg_11_given_layout(model_name:str, best_layout):
+def create_vgg_given_layout(model_name:str, best_layout):
 
     layout = [id2layout[l] for l in best_layout]
     return ios.models.vgg_net_opt_layout(cfgs[model2char[model_name]], layout, model_name)
@@ -85,19 +85,19 @@ def main(model_name: str):
     latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, repeat=6, profile_stage=True)
 
 
-    print(f'original vgg_11 Sequential schedule: {np.mean(latency0):.3f} ms')
-    print(f'original vgg_11 Stage latency: {np.mean(np.array(stage_latency0).reshape(6, -1), axis=0)}\n')
+    print(f'original {model_name} Sequential schedule: {np.mean(latency0):.3f} ms')
+    print(f'original {model_name} Stage latency: {np.mean(np.array(stage_latency0).reshape(6, -1), axis=0)}\n')
 
     conv_latencies, transform_latencies = get_convandtransform_latency_from_graph(graph0)
     best_layouts = dp_best_layout(conv_latencies, transform_latencies)
-    graph1 = create_vgg_11_given_layout(model_name, best_layouts)
+    graph1 = create_vgg_given_layout(model_name, best_layouts)
 
     graph1.sequential_schedule()
     latency1, stage_latency1 = ios.ios_runtime.graph_latency(graph1, batch_size=1, repeat=6, profile_stage=True)
 
 
-    print(f'opt vgg_11 Sequential schedule: {np.mean(latency1):.3f} ms')
-    print(f'opt vgg_11 Stage latency: {np.mean(np.array(stage_latency1).reshape(6, -1), axis=0)}\n')
+    print(f'opt {model_name} Sequential schedule: {np.mean(latency1):.3f} ms')
+    print(f'opt {model_name} Stage latency: {np.mean(np.array(stage_latency1).reshape(6, -1), axis=0)}\n')
 
 
 if __name__ == '__main__':
@@ -106,5 +106,5 @@ if __name__ == '__main__':
                         help="name of model")
     args = parser.parse_args()
     if "vgg" not in args.model:
-        raise ValueError("{args.model} is not supported, only vgg_11/13/16/19 are supported")
+        raise ValueError("{args.model} is not supported, onl/13/16/19 are supported")
     main(args.model)

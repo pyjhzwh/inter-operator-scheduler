@@ -63,7 +63,6 @@ def vgg_net_opt_layout(cfg, layout, name):
             #     conv_in_layout=conv_in_layout, conv_out_layout=conv_out_layout
             # )
             if prev_layout != conv_in_layout:
-                print(f"transform {prev_layout}->{conv_in_layout}")
                 v = transform(block, [[v]], dst_layout = conv_in_layout)
             v = conv2d(
                 block, [[v]], c, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act="relu",
