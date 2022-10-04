@@ -7,34 +7,20 @@ from ios.optimizer import *
 from ios.ir import *
 import itertools
 import csv
-
-
-def get_conv_key(node):
-    assert(len(node.weight_shape) == 4)
-    assert(len(node.stride) == 2)
-    assert(len(node.padding) == 2)
-    assert(node.weight_shape[1] == node.input_shape[0]) # in_c matches
-    # key0 = str(node.input_shape[0]) + '_' + str(node.input_shape[1]) + '_' + str(node.input_shape[2]) + '_'
-    # key1 = str(node.weight_shape[0]) + '_' + str(node.weight_shape[1]) + '_' + str(node.weight_shape[2]) + '_'  + str(node.weight_shape[3]) + '_'
-    # key2 = str(node.stride[0]) + '_' + str(node.stride[1]) + '_'
-    # key3 = str(node.padding[0]) + '_' + str(node.padding[1])
-    param = [node.input_shape[0], node.input_shape[1], node.input_shape[2],  # 0, 1, 2
-        node.weight_shape[0], node.weight_shape[1], node.weight_shape[2], node.weight_shape[3], # 3, 4, 5, 6
-        node.stride[0], node.stride[1], node.padding[0], node.padding[1], node.act] # 7, 8, 9, 10, 11
-    return param
+from ios.utils import get_conv_key
 
 def create_conv_graph_given_layout(conv_param: list, input_layout: str, output_layout: str, transform_conv:bool):
     if transform_conv:
         # default layout is NCHW
         v = ios.placeholder(output_shape=(conv_param[:3]), layout="NCHW")
         block = ios.Block(enter_node=v.node)
-        ios.transform_conv2d(block, inputs=[[v]], out_channels=conv_param[0],
+        ios.transform_conv2d(block, inputs=[[v]], out_channels=conv_param[3],
             kernel=(conv_param[5:7]), stride=(conv_param[7:9]), padding=(conv_param[9:11]),
             act=conv_param[11], conv_in_layout=input_layout, conv_out_layout=output_layout, is_exit=True)
     else:
         v = ios.placeholder(output_shape=(conv_param[:3]), layout=input_layout)
         block = ios.Block(enter_node=v.node)
-        ios.conv2d(block, inputs=[[v]], out_channels=conv_param[0],
+        ios.conv2d(block, inputs=[[v]], out_channels=conv_param[3],
             kernel=(conv_param[5:7]), stride=(conv_param[7:9]), padding=(conv_param[9:11]),
             act=conv_param[11], layout=output_layout, is_exit=True)
     
