@@ -44,7 +44,6 @@ def vgg_net(cfg, name):
 
 
 def vgg_net_opt_layout(cfg, layout, name):
-    print("layout", layout)
     reset_name()
     cnt = 0
     pv = placeholder(output_shape=(3, 224, 224), layout=layout[cnt][0])
