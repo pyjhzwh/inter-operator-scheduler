@@ -36,13 +36,13 @@ def dp_best_layout(conv_latencies, transform_latencies):
             curmin = 100.0
             minidx = -1
             for k in range(4):
-                if j % 2 == 0 and k % 2 == 1: # NCHW->NHWC
+                if k % 2 == 0 and j >= 2: # NCHW->NHWC 00, 10 -> 10, 11
                     cost = transform_latencies[i-1][0]
-                elif j % 2 == 1 and k % 2 == 0: # NHWC->NCHW
+                elif k % 2 == 1 and j <= 1: # NHWC->NCHW 01, 11 -> 00, 01
                     cost = transform_latencies[i-1][1]
                 else:
                     cost = 0
-                cur = dp[k] + conv_latencies[i][k] + cost
+                cur = dp[k] + conv_latencies[i][j] + cost
                 if cur < curmin:
                     curmin = cur
                     minidx = k
@@ -103,7 +103,7 @@ def main(model_name: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('use dp to get the best layout for vgg model')
-    parser.add_argument('-m', '--model', type=str, required=True,
+    parser.add_argument('-m', '--model', type=str, default="vgg_11",
                         help="name of model")
     args = parser.parse_args()
     if "vgg" not in args.model:
