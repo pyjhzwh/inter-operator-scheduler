@@ -36,10 +36,10 @@ def dp_best_layout(conv_latencies, transform_latencies):
             curmin = 100.0
             minidx = -1
             for k in range(4):
-                if k % 2 == 0 and i % 2 == 1: # NCHW->NHWC
-                    cost = transform_latencies[i][0]
-                elif k % 2 == 1 and i % 2 == 0: # NHWC->NCHW
-                    cost = transform_latencies[i][1]
+                if j % 2 == 0 and k % 2 == 1: # NCHW->NHWC
+                    cost = transform_latencies[i-1][0]
+                elif j % 2 == 1 and k % 2 == 0: # NHWC->NCHW
+                    cost = transform_latencies[i-1][1]
                 else:
                     cost = 0
                 cur = dp[k] + conv_latencies[i][k] + cost
@@ -86,6 +86,7 @@ def main(model_name: str):
     graph1 = create_vgg_given_layout(model_name, best_layouts)
 
     graph0.sequential_schedule()
+    # print(graph0)
     latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, warmup=10, repeat=10, profile_stage=True)
 
     print(f'original {model_name} Sequential schedule: {np.mean(latency0):.3f} ms')
