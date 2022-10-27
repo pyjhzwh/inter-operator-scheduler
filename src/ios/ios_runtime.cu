@@ -119,7 +119,7 @@ void get_stride(int N, int C, int H, int W, string layout, int* stride)
 
 
 struct ConvKey {
-    int attrs[12];
+    int attrs[14];
     ConvKey() {}
     ConvKey(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
         cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
@@ -139,8 +139,8 @@ struct ConvKey {
         attrs[13] = output_layout;
     }
     void print() {
-        fprintf(stderr, "input_shape: %d %d %d %d  out_channels: %d  kernel, stride, padding: %d %d, %d %d, %d %d  groups: %d\n",
-                attrs[0], attrs[1], attrs[2], attrs[3], attrs[4], attrs[5], attrs[6], attrs[7], attrs[8], attrs[9], attrs[10], attrs[11]);
+        fprintf(stderr, "input_shape: %d %d %d %d  out_channels: %d  kernel, stride, padding: %d %d, %d %d, %d %d  groups: %d input_layout: %d, output_layout: %d\n",
+                attrs[0], attrs[1], attrs[2], attrs[3], attrs[4], attrs[5], attrs[6], attrs[7], attrs[8], attrs[9], attrs[10], attrs[11], attrs[12], attrs[13]);
     }
 };
 
@@ -189,7 +189,7 @@ struct ConvAlgMap {
         conv2alg[key] = alg;
 
         std::ofstream fout(config_filename, std::ios_base::out | std::ios_base::app);
-        for(int i = 0; i < 12; i++)
+        for(int i = 0; i < 14; i++)
             fout << key.attrs[i] << " ";
         fout << static_cast<int>(alg) << std::endl;
         fout.close();
@@ -236,7 +236,7 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     checkCUDNN(cudnnCreateConvolutionDescriptor(&convDesc));
     checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
     assert(in_channels % groups == 0);
-    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, cudnn_data_format, out_channels, in_channels / groups, kernel_h, kernel_w));
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, input_layout, out_channels, in_channels / groups, kernel_h, kernel_w));
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
     checkCUDNN(cudnnSetConvolutionMathType(convDesc, cudnn_math_type));
     checkCUDNN(cudnnSetConvolutionGroupCount(convDesc, groups));
@@ -348,9 +348,9 @@ struct ConvOP {
         checkCUDNN(cudnnCreateTensorDescriptor(&outputTensor));
         checkCUDNN(cudnnCreateConvolutionDescriptor(&convDesc));
         checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
-        checkCUDNN(cudnnSetTensor4dDescriptor(biasTensor, cudnn_data_format, cudnn_bias_data_type, 1, out_channels, 1, 1));
+        checkCUDNN(cudnnSetTensor4dDescriptor(biasTensor, input_layout, cudnn_bias_data_type, 1, out_channels, 1, 1));
         assert(in_channels % groups == 0);
-        checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, cudnn_data_format, out_channels, in_channels / groups, kernel_h, kernel_w));
+        checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, input_layout, out_channels, in_channels / groups, kernel_h, kernel_w));
         checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
         checkCUDNN(cudnnSetConvolutionMathType(convDesc, cudnn_math_type));
         checkCUDNN(cudnnSetConvolutionGroupCount(convDesc, groups));
