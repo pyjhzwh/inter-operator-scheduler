@@ -2,7 +2,6 @@ import ios
 import numpy as np
 from ios.utils import get_conv_key, conv_latency, get_transform_key, transform_latency
 import argparse
-import parser
 
 def get_convandtransform_latency_from_graph(graph: ios.Graph):
     conv_latencies = []
@@ -79,26 +78,30 @@ def create_vgg_given_layout(model_name:str, best_layout):
 
 
 def main(model_name: str):
-    graph0 = getattr(ios.models, model_name)()
+    warmup = 1
+    repeat = 10
 
+    graph0 = getattr(ios.models, model_name)()
+    # graph0 = create_vgg_given_layout(model_name, [3]*20)
+    
     conv_latencies, transform_latencies = get_convandtransform_latency_from_graph(graph0)
     best_layouts = dp_best_layout(conv_latencies, transform_latencies)
     graph1 = create_vgg_given_layout(model_name, best_layouts)
 
     graph0.sequential_schedule()
     # print(graph0)
-    latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, warmup=10, repeat=10, profile_stage=True)
+    latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
 
     print(f'original {model_name} Sequential schedule: {np.mean(latency0):.3f} ms')
-    print(f'original {model_name} Stage latency: {np.mean(np.array(stage_latency0).reshape(10, -1), axis=0)}\n')
+    print(f'original {model_name} Stage latency: {np.mean(np.array(stage_latency0).reshape(repeat, -1), axis=0)}\n')
 
     graph1.sequential_schedule()
     print(graph1)
-    latency1, stage_latency1 = ios.ios_runtime.graph_latency(graph1, batch_size=1, warmup=10, repeat=10, profile_stage=True)
+    latency1, stage_latency1 = ios.ios_runtime.graph_latency(graph1, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
 
 
     print(f'opt {model_name} Sequential schedule: {np.mean(latency1):.3f} ms')
-    print(f'opt {model_name} Stage latency: {np.mean(np.array(stage_latency1).reshape(10, -1), axis=0)}\n')
+    print(f'opt {model_name} Stage latency: {np.mean(np.array(stage_latency1).reshape(repeat, -1), axis=0)}\n')
 
 
 if __name__ == '__main__':
