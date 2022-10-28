@@ -15,6 +15,7 @@ sequence of operators. Other operators are normal operators.
 from typing import List, Iterable, Sequence, Tuple, Dict, Optional
 import numpy as np
 
+DEFAULT_LAYOUT="NCHW"
 
 class Value:
     """
@@ -311,9 +312,9 @@ class Conv(Node):
     act: str, must be one of 'relu', 'sigmoid', 'tanh', 'identity'
         The activation function applied to the output of convolution
     """
-    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout']
+    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout', 'disable_tc']
 
-    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW"):
+    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW", disable_tc=False):
         super().__init__("conv", name, hint_name, inputs, output_shape, layout)
         self.kernel = kernel
         self.stride = stride
@@ -327,6 +328,7 @@ class Conv(Node):
         else:
             self.input_layout = "NCHW"
         self.output_layout = layout
+        self.disable_tc = disable_tc
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -354,6 +356,7 @@ class Conv(Node):
             act=config['act'],
             output_shape=config['output_shape'],
             layout=config['layout'],
+            disable_tc=config['disable_tc'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -375,6 +378,7 @@ class Conv(Node):
             'act': self.act,
             'output_shape': self.output_shape,
             'layout': self.layout,
+            'disable_tc': self.disable_tc,
         }
         return config
 
@@ -663,7 +667,15 @@ class Identity(Node):
     Identity operator. It can also works as the Concat operator when there are multiple terms in the inputs.
     """
     def __init__(self, name, hint_name, inputs, output_shape):
-        super().__init__("identity", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("identity", name, hint_name, inputs, output_shape, layout)
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -673,7 +685,6 @@ class Identity(Node):
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
                     config['inputs']],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -840,9 +851,18 @@ class Transform(Node):
         self, name, hint_name, inputs, dst_layout, output_shape
     ):
         super().__init__("transform", name, hint_name, inputs, output_shape, dst_layout)
-        # print("inputs", inputs)
-        self.src_layout = inputs[0][0].node.layout
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        self.src_layout = layout
         self.dst_layout = dst_layout
+
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.src_layout = self.inputs[0][0].node.layout
+
     
     @staticmethod
     def from_config(config, name2node):
@@ -854,7 +874,6 @@ class Transform(Node):
             # src_layout=config["src_layout"],
             dst_layout=config["dst_layout"],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -871,7 +890,6 @@ class Transform(Node):
             'src_layout': self.src_layout,
             'dst_layout': self.dst_layout,
             'output_shape': self.output_shape,
-            'layout': self.layout,
         }
         return config
 
@@ -901,12 +919,12 @@ class Transform_Conv(Node):
     """
     __slots__ = [
         'out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'conv_in_layout', 'conv_out_layout',
-        'transform_src_layout', 'transform_dst_layout'
+        'transform_src_layout', 'transform_dst_layout', 'disable_tc'
     ]
 
     def __init__(
         self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
-        conv_in_layout="NCHW", conv_out_layout="NCHW",
+        conv_in_layout="NCHW", conv_out_layout="NCHW", disable_tc=False,
     ):
         super().__init__(f"transform_conv_{conv_in_layout}_{conv_out_layout}",
             name, hint_name, inputs, output_shape, conv_out_layout)
@@ -925,6 +943,7 @@ class Transform_Conv(Node):
         assert act in ['relu', 'sigmoid', 'tanh', 'identity']
         self.conv_in_layout = conv_in_layout
         self.conv_out_layout = conv_out_layout
+        self.disable_tc = disable_tc
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -960,6 +979,7 @@ class Transform_Conv(Node):
             output_shape=config['output_shape'],
             conv_in_layout=config['conv_in_layout'],
             conv_out_layout=config["conv_out_layout"],
+            disable_tc=config["disable_tc"],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -982,6 +1002,7 @@ class Transform_Conv(Node):
             'output_shape': self.output_shape,
             'conv_in_layout': self.conv_in_layout,
             'conv_out_layout': self.conv_out_layout,
+            'disable_tc': self.disable_tc,
         }
         return config
 

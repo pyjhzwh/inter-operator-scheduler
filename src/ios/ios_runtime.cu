@@ -220,7 +220,7 @@ CudnnContext contexts[MAX_NUM_GROUPS];
 
 
 cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
-    cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
+    cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout, bool disable_tc) {
     ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
     if(conv_alg_map.count(key))
         return conv_alg_map.get(key);
@@ -238,7 +238,10 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     assert(in_channels % groups == 0);
     checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, input_layout, out_channels, in_channels / groups, kernel_h, kernel_w));
     checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
-    checkCUDNN(cudnnSetConvolutionMathType(convDesc, cudnn_math_type));
+    cudnnMathType_t conv_math_type = cudnn_math_type;
+    if (disable_tc)
+        conv_math_type = CUDNN_DEFAULT_MATH;
+    checkCUDNN(cudnnSetConvolutionMathType(convDesc, conv_math_type));
     checkCUDNN(cudnnSetConvolutionGroupCount(convDesc, groups));
     int n, c, h, w;
     checkCUDNN(cudnnGetConvolution2dForwardOutputDim(convDesc, inputTensor, filterDesc, &n, &c, &h, &w));
@@ -312,8 +315,10 @@ struct ConvOP {
     data_type *filter_data;
     data_type *bias_data;
 
+    bool disable_tc;
+
     void init(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups, string act,
-        string input_layout, string output_layout) {
+        string input_layout, string output_layout, bool disable_tc) {
         this->batch_size = batch_size;
         this->in_channels = in_channels;
         this->input_h = input_h;
@@ -332,6 +337,7 @@ struct ConvOP {
         this->output_w = 1 + (input_w - kernel_w + 2 * padding_w) / stride_w;
         this->input_layout = getCudNNLayoutFromStr(input_layout);
         this->output_layout = getCudNNLayoutFromStr(output_layout);
+        this->disable_tc = disable_tc;
     }
     size_t get_filter_size() {
         return sizeof(data_type) * out_channels * (in_channels / groups) * kernel_h * kernel_w;
@@ -352,7 +358,10 @@ struct ConvOP {
         assert(in_channels % groups == 0);
         checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, input_layout, out_channels, in_channels / groups, kernel_h, kernel_w));
         checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
-        checkCUDNN(cudnnSetConvolutionMathType(convDesc, cudnn_math_type));
+        cudnnMathType_t conv_math_type = cudnn_math_type;
+        if (disable_tc)
+            conv_math_type = CUDNN_DEFAULT_MATH;
+        checkCUDNN(cudnnSetConvolutionMathType(convDesc, conv_math_type));
         checkCUDNN(cudnnSetConvolutionGroupCount(convDesc, groups));
         int n, c, h, w;
         checkCUDNN(cudnnGetConvolution2dForwardOutputDim(convDesc, inputTensor, filterDesc, &n, &c, &h, &w));
@@ -382,19 +391,29 @@ struct ConvOP {
         checkCUDA(cudaMalloc(&filter_data, filter_size));
         checkCUDA(cudaMalloc(&bias_data, bias_size));
         checkCUDA(cudaMalloc(&output_data, output_size));
-        this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
+        this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout, disable_tc);
     }
     void forward() {
         const float alpha = 1.0f;
         const float beta = 0.0f;
         if(has_act) {
 #if defined(USE_TENSOR_CORE)
-            checkCUDNN(cudnnConvolutionForward(
+            if(! disable_tc)
+            {
+                checkCUDNN(cudnnConvolutionForward(
+                        context->dnn, &alpha, inputTensor, input_data, filterDesc, filter_data,
+                        convDesc, conv_alg, context->space, context->max_size,
+                        &beta, outputTensor, output_data));
+                checkCUDNN(cudnnAddTensor(context->dnn, &alpha, biasTensor, bias_data, &alpha, outputTensor, output_data));
+                checkCUDNN(cudnnActivationForward(context->dnn, actiDesc, &alpha, outputTensor, output_data, &beta, outputTensor, output_data));
+            }
+            else{
+                checkCUDNN(cudnnConvolutionBiasActivationForward(
                     context->dnn, &alpha, inputTensor, input_data, filterDesc, filter_data,
                     convDesc, conv_alg, context->space, context->max_size,
-                    &beta, outputTensor, output_data));
-            checkCUDNN(cudnnAddTensor(context->dnn, &alpha, biasTensor, bias_data, &alpha, outputTensor, output_data));
-            checkCUDNN(cudnnActivationForward(context->dnn, actiDesc, &alpha, outputTensor, output_data, &beta, outputTensor, output_data));
+                    &beta, outputTensor, output_data, biasTensor, bias_data, actiDesc,
+                    outputTensor, output_data));
+            }
 #else
             checkCUDNN(cudnnConvolutionBiasActivationForward(
                     context->dnn, &alpha, inputTensor, input_data, filterDesc, filter_data,
@@ -1039,7 +1058,9 @@ struct Conv: NodeBase {
                      conv_config["groups"].asInt(),
                      conv_config["act"].asString(),
                      input.layout,
-                     conv_config["layout"].asString());
+                     conv_config["layout"].asString(),
+                     conv_config["disable_tc"].asBool()
+                     );
         this->batch_size = input.batch_size;
         this->out_channels = conv_op.out_channels;
         this->output_h = conv_op.output_h;
@@ -1118,7 +1139,8 @@ struct Conv_NCHW_NCHW: Transform_Conv {
                      conv_config["groups"].asInt(),
                      conv_config["act"].asString(),
                      "NCHW",
-                     "NCHW");
+                     "NCHW",
+                     conv_config["disable_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1159,7 +1181,8 @@ struct Conv_NCHW_NHWC: Transform_Conv {
                      conv_config["groups"].asInt(),
                      conv_config["act"].asString(),
                      "NCHW",
-                     "NHWC");
+                     "NHWC",
+                     conv_config["disable_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1200,7 +1223,8 @@ struct Conv_NHWC_NCHW: Transform_Conv {
                      conv_config["groups"].asInt(),
                      conv_config["act"].asString(),
                      "NHWC",
-                     "NCHW");
+                     "NCHW",
+                     conv_config["disable_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1241,7 +1265,8 @@ struct Conv_NHWC_NHWC: Transform_Conv {
                      conv_config["groups"].asInt(),
                      conv_config["act"].asString(),
                      "NHWC",
-                     "NHWC");
+                     "NHWC",
+                     conv_config["disable_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1528,7 +1553,7 @@ struct Transform: NodeBase {
         this->output_w = input.output_w;
         this->context = context;
         this->output_data = nullptr;
-        this->init_stride(config["layout"].asString());
+        this->init_stride(config["dst_layout"].asString());
     }
 
     void map() override {
