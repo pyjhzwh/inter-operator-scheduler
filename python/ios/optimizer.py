@@ -206,6 +206,29 @@ def optimize(graph: Graph,
     return new_graph
 
 
+def graph_schedule_by_stage_list(
+    graph: Graph,
+    stage_list: List,
+    compute_weight=False) -> Graph:
+
+    graph_enter = Placeholder(graph.input.name, graph.input.hint_name, graph.input.output_shape, graph.input.layout)
+    graph_enter.output_shape = graph.enter_node.output_shape
+    blocks = []
+
+    for block, stage in zip(graph.blocks, stage_list):
+        all_nodes = block.inner_nodes + [block.exit_node]
+
+        nid: Dict[Node, int] = {node: i for i, node in enumerate(all_nodes)}
+        idn: Dict[int, Node] = {i: node for i, node in enumerate(all_nodes)}
+
+        new_block = construct(stage, block, blocks, graph_enter, idn, nid, compute_weight)
+        blocks.append(new_block)
+
+    new_graph = Graph(graph.name, graph_enter, blocks)
+    new_graph.infer_shape()
+    return new_graph
+
+
 def count_bits(s):
     """
     Count the number of bit 1 in the binary representation of non-negative number s

@@ -1,4 +1,4 @@
-from .optimizer import optimize
+from .optimizer import optimize, graph_schedule_by_stage_list
 from .ir import Graph
 from .cost_model import IOSCostModel, RandomCostModel
 from .models.common import Graph, Block, placeholder, reset_name
