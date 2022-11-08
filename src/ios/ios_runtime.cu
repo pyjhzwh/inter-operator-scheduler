@@ -544,9 +544,11 @@ struct ElementOP {
     int h;
     int w;
     int op_type;
-    cudnnTensorFormat_t input_layout;
+    cudnnTensorFormat_t input_layout_a;
+    cudnnTensorFormat_t input_layout_b;
 
-    cudnnTensorDescriptor_t inputTensor;
+    cudnnTensorDescriptor_t inputTensor_a;
+    cudnnTensorDescriptor_t inputTensor_b;
     cudnnOpTensorDescriptor_t opDesc;
 
     data_type *input_a;
@@ -554,14 +556,15 @@ struct ElementOP {
     data_type *output_data;
     CudnnContext *context;
 
-    void init(int batch_size, int channels, int h, int w, int op_type, string input_layout) {
+    void init(int batch_size, int channels, int h, int w, int op_type, string input_layout_a, string input_layout_b) {
         this->batch_size = batch_size;
         this->channels = channels;
         this->h = h;
         this->w = w;
         this->op_type = op_type;
         this->context = nullptr;
-        this->input_layout = getCudNNLayoutFromStr(input_layout);
+        this->input_layout_a = getCudNNLayoutFromStr(input_layout_a);
+        this->input_layout_b = getCudNNLayoutFromStr(input_layout_b);
     }
     void map(data_type *input_a, data_type *input_b, CudnnContext *context) {
         this->input_a = input_a;
@@ -570,9 +573,11 @@ struct ElementOP {
         this->context = context;
         checkCUDA(cudaMalloc(&output_data, size));
 
-        checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor));
+        checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor_a));
+        checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor_b));
         checkCUDNN(cudnnCreateOpTensorDescriptor(&opDesc));
-        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, channels, h, w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor_a, input_layout_a, cudnn_data_type, batch_size, channels, h, w));
+        checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor_b, input_layout_b, cudnn_data_type, batch_size, channels, h, w));
         cudnnOpTensorOp_t opType;
         if(op_type == MUL)
             opType = CUDNN_OP_TENSOR_MUL;
@@ -580,15 +585,19 @@ struct ElementOP {
             opType = CUDNN_OP_TENSOR_ADD;
         else
             FatalError("not supported elementwise op");
-        checkCUDNN(cudnnSetOpTensorDescriptor(opDesc, opType, cudnn_data_type, CUDNN_NOT_PROPAGATE_NAN));
+        // https://docs.nvidia.com/deeplearning/cudnn/api/index.html#cudnnOpTensor
+        // opTensorCompType in opTensorDesc could not be HALF
+        cudnnDataType_t op_data_type = CUDNN_DATA_FLOAT;
+        checkCUDNN(cudnnSetOpTensorDescriptor(opDesc, opType, op_data_type, CUDNN_NOT_PROPAGATE_NAN));
     }
     void forward() {
         const float alpha = 1.0f;
         const float beta = 0.0f;
-        checkCUDNN(cudnnOpTensor(context->dnn, opDesc, &alpha, inputTensor, input_a, &alpha, inputTensor, input_b, &beta, inputTensor, output_data));
+        checkCUDNN(cudnnOpTensor(context->dnn, opDesc, &alpha, inputTensor_a, input_a, &alpha, inputTensor_b, input_b, &beta, inputTensor_a, output_data));
     }
     void unmap() {
-        checkCUDNN(cudnnDestroyTensorDescriptor(inputTensor));
+        checkCUDNN(cudnnDestroyTensorDescriptor(inputTensor_a));
+        checkCUDNN(cudnnDestroyTensorDescriptor(inputTensor_b));
         checkCUDNN(cudnnDestroyOpTensorDescriptor(opDesc));
         checkCUDA(cudaFree(output_data));
     }
@@ -1317,7 +1326,7 @@ struct Element: NodeBase {
         this->inputs[0].init(inputs_config[0][0], node_map);
         this->inputs[1].init(inputs_config[0][1], node_map);
         elem_op.init(
-            inputs[0].batch_size, inputs[0].out_channels, inputs[0].output_h, inputs[0].output_w, op_type, inputs[0].layout
+            inputs[0].batch_size, inputs[0].out_channels, inputs[0].output_h, inputs[0].output_w, op_type, inputs[0].layout, inputs[1].layout
         );
         this->context = nullptr;
         this->output_data = nullptr;
