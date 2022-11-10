@@ -158,7 +158,7 @@ def resnet50():
     v, block4, out_channels = resnet_block(v, block_func=bottleneck, expansion=4, channels=256, layers=6, in_channels=out_channels, stride=(2, 2))
     v, block5, out_channels = resnet_block(v, block_func=bottleneck, expansion=4, channels=512, layers=3, in_channels=out_channels, stride=(2, 2))
 
-    graph = Graph("resnet50", pv.node, [block1, block2, block3])#, block4, block5])
+    graph = Graph("resnet50", pv.node, [block1, block2, block3, block4, block5])
     graph.init_weights()
     graph.sequential_schedule()
     return graph
@@ -172,7 +172,7 @@ def resnet18_opt_layout(layouts):
     v, block4, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=256, layers=2, in_channels=out_channels, stride=(2, 2), layout=layouts[10:10+5], prev_layout=prev_layout)
     v, block5, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=512, layers=2, in_channels=out_channels, stride=(2, 2), layout=layouts[15:15+5], prev_layout=prev_layout)
 
-    graph = Graph("resnet18", pv.node, [block1, block2, block3])#, block4, block5])
+    graph = Graph("resnet18", pv.node, [block1, block2, block3, block4, block5])
     graph.init_weights()
     graph.sequential_schedule()
     return graph
