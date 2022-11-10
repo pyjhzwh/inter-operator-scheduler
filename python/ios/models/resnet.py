@@ -176,3 +176,34 @@ def resnet18_opt_layout(layouts):
     graph.init_weights()
     graph.sequential_schedule()
     return graph
+
+def resnet34_opt_layout(layouts):
+    reset_name()
+
+    pv = placeholder(output_shape=(3, 224, 224), layout=layouts[0][0])
+    v, block1, out_channels, prev_layout = resnet_front_layout(pv, layouts[0], prev_layout=layouts[0][0])
+    v, block2, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=64,  layers=3, in_channels=out_channels, stride=(1, 1), layout=layouts[1:1+2*3], prev_layout=prev_layout)
+    v, block3, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=128, layers=4, in_channels=out_channels, stride=(2, 2), layout=layouts[7:7+2*4+1], prev_layout=prev_layout)
+    v, block4, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=256, layers=6, in_channels=out_channels, stride=(2, 2), layout=layouts[16:16+2*6+1], prev_layout=prev_layout)
+    v, block5, out_channels, prev_layout = resnet_block_layout(v, block_func=basic_block_layout, expansion=1, channels=512, layers=3, in_channels=out_channels, stride=(2, 2), layout=layouts[29:29+2*3+1], prev_layout=prev_layout)
+
+    graph = Graph("resnet34", pv.node, [block1, block2, block3, block4, block5])
+    graph.init_weights()
+    graph.sequential_schedule()
+    return graph
+
+def resnet50_opt_layout(layouts):
+    reset_name()
+
+    pv = placeholder(output_shape=(3, 224, 224), layout=layouts[0][0])
+    v, block1, out_channels, prev_layout = resnet_front_layout(pv, layouts[0], prev_layout=layouts[0][0])
+    v, block2, out_channels, prev_layout = resnet_block_layout(v, block_func=bottleneck_layout, expansion=4, channels=64,  layers=3, in_channels=out_channels, stride=(1, 1), layout=layouts[1:1+3*3+1], prev_layout=prev_layout)
+    v, block3, out_channels, prev_layout = resnet_block_layout(v, block_func=bottleneck_layout, expansion=4, channels=128, layers=4, in_channels=out_channels, stride=(2, 2), layout=layouts[11:11+3*4+1], prev_layout=prev_layout)
+    v, block4, out_channels, prev_layout = resnet_block_layout(v, block_func=bottleneck_layout, expansion=4, channels=256, layers=6, in_channels=out_channels, stride=(2, 2), layout=layouts[24:24+3*6+1], prev_layout=prev_layout)
+    v, block5, out_channels, prev_layout = resnet_block_layout(v, block_func=bottleneck_layout, expansion=4, channels=512, layers=3, in_channels=out_channels, stride=(2, 2), layout=layouts[42:42+3*3+1], prev_layout=prev_layout)
+
+
+    graph = Graph("resnet50", pv.node, [block1, block2, block3, block4, block5])
+    graph.init_weights()
+    graph.sequential_schedule()
+    return graph
