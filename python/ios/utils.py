@@ -4,6 +4,10 @@ import numpy as np
 import ios
 from ios.ir import *
 
+batch = 1
+warmup = 10
+repeat = 100
+
 def seqeq(seq1: Sequence, seq2: Sequence):
     """
     Compare whether two sequences are equal
@@ -58,7 +62,7 @@ def conv_latency(conv_param: list):
         graph = create_conv_graph_given_layout(conv_param, input_layout, output_layout)
 
         graph.sequential_schedule()
-        seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, warmup=10, repeat=100)
+        seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=batch, warmup=warmup, repeat=repeat)
         latencies.append(np.mean(seq_latency))
 
     return latencies
@@ -112,7 +116,7 @@ def transform_latency(transform_param: list):
         graph = create_transform_graph_given_layout(transform_param, input_layout, output_layout)
 
         graph.sequential_schedule()
-        seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, warmup=10, repeat=100)
+        seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=batch, warmup=warmup, repeat=repeat)
         latencies.append(np.mean(seq_latency))
 
     return latencies

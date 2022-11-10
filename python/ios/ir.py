@@ -15,7 +15,7 @@ sequence of operators. Other operators are normal operators.
 from typing import List, Iterable, Sequence, Tuple, Dict, Optional
 import numpy as np
 
-DEFAULT_LAYOUT="NCHW"
+DEFAULT_LAYOUT="NHWC"
 
 class Value:
     """
@@ -107,7 +107,7 @@ class Node:
     """
     __slots__ = ['type', 'name', 'hint_name', 'inputs', 'output_shape', 'uses', 'layout']
 
-    def __init__(self, type, name, hint_name, inputs, output_shape, layout="NCHW"):
+    def __init__(self, type, name, hint_name, inputs, output_shape, layout=DEFAULT_LAYOUT):
         self.type = type
         self.name = name
         self.hint_name = hint_name
@@ -251,7 +251,7 @@ class Placeholder(Node):
     """
     The placeholder that represents the input of the computation graph.
     """
-    def __init__(self, name, hint_name, output_shape, layout="NCHW"):
+    def __init__(self, name, hint_name, output_shape, layout=DEFAULT_LAYOUT):
         super().__init__("placeholder", name, hint_name, [[]], output_shape, layout)
 
     @staticmethod
@@ -314,7 +314,7 @@ class Conv(Node):
     """
     __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout', 'disable_tc']
 
-    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW", disable_tc=False):
+    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout=DEFAULT_LAYOUT, disable_tc=False):
         super().__init__("conv", name, hint_name, inputs, output_shape, layout)
         self.kernel = kernel
         self.stride = stride
@@ -326,7 +326,7 @@ class Conv(Node):
         if self.inputs and len(self.inputs) > 0:
             self.input_layout = self.inputs[0][0].node.layout
         else:
-            self.input_layout = "NCHW"
+            self.input_layout = DEFAULT_LAYOUT
         self.output_layout = layout
         self.disable_tc = disable_tc
 
@@ -513,12 +513,20 @@ class Pool(Node):
     #
 
     def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape):
-        super().__init__('pool', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__('pool', name, hint_name, inputs, output_shape, layout)
         self.name = name
         self.pool_type = pool_type
         self.kernel = kernel
         self.stride = stride
         self.padding = padding
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -532,7 +540,6 @@ class Pool(Node):
             stride=config['stride'],
             padding=config['padding'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -608,8 +615,17 @@ class Element(Node):
     __slots__ = ['op_type']
 
     def __init__(self, name, hint_name, inputs, op_type, output_shape):
-        super().__init__("element", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("element", name, hint_name, inputs, output_shape, layout)
         self.op_type: str = op_type
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
+
 
     @staticmethod
     def from_config(config, name2node):
@@ -620,7 +636,6 @@ class Element(Node):
                     for term_config in config['inputs']],
             op_type=config['op_type'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -924,7 +939,7 @@ class Transform_Conv(Node):
 
     def __init__(
         self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
-        conv_in_layout="NCHW", conv_out_layout="NCHW", disable_tc=False,
+        conv_in_layout=DEFAULT_LAYOUT, conv_out_layout=DEFAULT_LAYOUT, disable_tc=False,
     ):
         super().__init__(f"transform_conv_{conv_in_layout}_{conv_out_layout}",
             name, hint_name, inputs, output_shape, conv_out_layout)
