@@ -15,7 +15,7 @@ sequence of operators. Other operators are normal operators.
 from typing import List, Iterable, Sequence, Tuple, Dict, Optional
 import numpy as np
 
-DEFAULT_LAYOUT="NHWC"
+DEFAULT_LAYOUT="NCHW"
 
 class Value:
     """
@@ -753,9 +753,17 @@ class Activation(Node):
     __slots__ = ['act_type', 'inplace']
 
     def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape):
-        super().__init__('activation', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__('activation', name, hint_name, inputs, output_shape, layout)
         self.act_type = act_type
         self.inplace = inplace
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -767,7 +775,6 @@ class Activation(Node):
             act_type=config['act_type'],
             inplace=config['inplace'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
