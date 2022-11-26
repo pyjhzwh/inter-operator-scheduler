@@ -145,6 +145,8 @@ class Node:
             return Sequential.from_config(config, name2node)
         elif config['type'] == 'transform':
             return Transform.from_config(config, name2node)
+        elif config['type'] == 'split_batch':
+            return SplitBatch.from_config(config, name2node)
         else:
             raise ValueError(f"unrecognized node type {config['type']}")
 
@@ -1065,6 +1067,75 @@ class Transform_Conv(Node):
 
     def readable_lines(self, indent) -> List[str]:
         return [f'[{self.hint_name}]Transform_Conv2d({self.input_readable_str()})[Transform:{self.transform_src_layout}->{self.transform_dst_layout}, Conv:{self.conv_in_layout}->{self.conv_out_layout}]']
+
+
+class SplitBatch(Node):
+    """
+    Split the input node by (batch_begin:batch_end) in batch dimension
+    """
+    def __init__(
+        self, name, hint_name, inputs, output_shape, batch_begin, batch_end
+    ):
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("split_batch", name, hint_name, inputs, output_shape, layout)
+        self.batch_begin = batch_begin
+        self.batch_end = batch_end
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
+
+    @staticmethod
+    def from_config(config, name2node):
+        node = SplitBatch(
+            name=config['name'],
+            hint_name=config['hint_name'],
+            inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
+                    config['inputs']],
+            output_shape=config['output_shape'],
+            batch_begin=config['batch_begin'],
+            batch_end=config['batch_end'],
+        )
+        for ti, term in enumerate(node.inputs):
+            for vi, value in enumerate(term):
+                name2node[value.node.name].uses.append((node, ti, vi))
+        return node
+
+    def export_config(self):
+        config = {
+            'type': 'split_batch',
+            'name': self.name,
+            'hint_name': self.hint_name,
+            'inputs': None if self.inputs is None else [[value.export_config() for value in term] for term in
+                                                        self.inputs],
+            'output_shape': self.output_shape,
+            'layout': self.layout,
+            'batch_begin': self.batch_begin,
+            'batch_end': self.batch_end,
+        }
+        return config
+
+    @property
+    def input_shape(self):
+        return (sum(term[0].length for term in self.inputs), *self.inputs[0][0].node.output_shape[1:])
+
+    def infer_shape(self):
+        self.output_shape = self.input_shape
+
+    def flops(self):
+        return self.input_flops()
+
+    def memory_access(self):
+        return self.input_memory_access()
+
+    def kernels(self):
+        return 1 + self.input_kernels()
+
+    def readable_lines(self, indent) -> List[str]:
+        return [f'[{self.hint_name}]SplitBatch({self.input_readable_str()})[{self.batch_begin}:{self.batch_end}]']
 
 
 class Block:

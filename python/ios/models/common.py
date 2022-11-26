@@ -4,7 +4,7 @@ Utilities used to construct computation graph.
 Please refer the definition of inception v3, nasnet, randwire, and squeezenet for the definition of network.
 """
 from typing import Tuple, List
-from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph, Transform_Conv
+from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph, Transform_Conv, SplitBatch
 from ios.ir import DEFAULT_LAYOUT
 
 
@@ -609,3 +609,15 @@ def transform_conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(
     # else:
     #     block.inner_nodes.append(conv)
     return Value(conv, 0, out_channels)
+
+
+def split_batch(block: Block, inputs, batch_begin, batch_end, is_exit=False):
+    """
+    Split the input in batch dimension
+    """
+    name = new_name()
+    split_batch = SplitBatch(
+        name, name, inputs, None, batch_begin, batch_end
+    )
+    setup_op(split_batch, inputs, block, is_exit)
+    return Value(split_batch, 0, split_batch.output_shape[0])

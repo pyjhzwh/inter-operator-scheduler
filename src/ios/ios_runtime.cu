@@ -1581,6 +1581,45 @@ struct Transform: NodeBase {
     }
 };
 
+struct SplitBatch: NodeBase {
+    Input input;
+    int batch_begin;
+    int batch_end;
+    
+    void init(const Json::Value &batch_config, const std::map<string,NodeBase*> &node_map) {
+        this->name = batch_config["name"].asString();
+        this->input.init(batch_config["inputs"], node_map);
+        this->batch_begin = batch_config["batch_begin"].asInt();
+        this->batch_end = batch_config["batch_end"].asInt();
+        this->context = nullptr;
+        this->output_data = nullptr;
+        this->batch_size = batch_end - batch_end;
+        this->out_channels = input.out_channels;
+        this->output_h = input.output_h;
+        this->output_w = input.output_w;
+        this->init_stride(batch_config["layout"].asString());
+    }
+
+    void map() override {
+        input.set_context(context);
+        input.map();
+        if (batch_begin > batch_end)
+            FatalError("batch_begin > batch_end");
+        if (batch_end > input.batch_size)
+            FatalError("batch_end should not > input's batch_size");
+        output_data = input.output_data + batch_begin * out_channels * output_h * output_w;
+        assert(output_data != nullptr);
+    }
+
+    void unmap() override {
+        return;
+    }
+
+    void forward() override {
+        return;
+    }
+};
+
 struct Graph {
     int num_inputs;
     Placeholder inputs[MAX_NUM_NODES];
@@ -1608,6 +1647,8 @@ struct Graph {
     Conv_NHWC_NCHW transform_conv_NHWC_NCHW[MAX_NUM_NODES];
     int num_transform_conv_NHWC_NHWC;
     Conv_NHWC_NHWC transform_conv_NHWC_NHWC[MAX_NUM_NODES];
+    int num_split_batch = 0;
+    SplitBatch split_batch[MAX_NUM_NODES];
 
     int num_stages;
     int stage_num_seq[MAX_NUM_NODES];
@@ -1618,7 +1659,8 @@ struct Graph {
         num_inputs = num_convs = num_pools = num_idents = num_relus = num_elem =
         num_acts = num_sequential = num_stages = num_transform = 
         num_transform_conv_NCHW_NCHW = num_transform_conv_NCHW_NHWC =
-        num_transform_conv_NHWC_NCHW = num_transform_conv_NHWC_NHWC = 0;
+        num_transform_conv_NHWC_NCHW = num_transform_conv_NHWC_NHWC = 
+        num_split_batch = 0;
     }
 
     NodeBase *add_node(Json::Value node_config, std::map<string, NodeBase*> &node_map) {
@@ -1671,6 +1713,10 @@ struct Graph {
             assert(num_transform_conv_NHWC_NHWC < MAX_NUM_NODES);
             transform_conv_NHWC_NHWC[num_transform_conv_NHWC_NHWC].init(node_config, node_map);
             nb = transform_conv_NHWC_NHWC + num_transform_conv_NHWC_NHWC++;
+        } else if(node_config["type"].asString() == "split_batch") {
+            assert(num_split_batch < MAX_NUM_NODES);
+            split_batch[num_split_batch].init(node_config, node_map);
+            nb = split_batch + num_split_batch++;
         }
         else {
             FatalError("unsupported type " + node_config["type"].asString());

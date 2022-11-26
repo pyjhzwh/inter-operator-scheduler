@@ -2,7 +2,7 @@ from .optimizer import optimize, graph_schedule_by_stage_list
 from .ir import Graph
 from .cost_model import IOSCostModel, RandomCostModel
 from .models.common import Graph, Block, placeholder, reset_name
-from .models.common import conv2d, pool2d, identity, relu, activation, multiply, addition, element, sequential, transform, transform_conv2d
+from .models.common import conv2d, pool2d, identity, relu, activation, multiply, addition, element, sequential, transform, transform_conv2d, split_batch
 from .contrib import ios_runtime, trt_runtime
 from .visualizer import draw
 from .utils import get_conv_key, conv_latency, get_transform_conv_blacklist
