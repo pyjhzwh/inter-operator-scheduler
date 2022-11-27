@@ -314,9 +314,11 @@ class Conv(Node):
     act: str, must be one of 'relu', 'sigmoid', 'tanh', 'identity'
         The activation function applied to the output of convolution
     """
-    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout', 'disable_tc']
+    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias',
+        'input_layout', 'output_layout', 'disable_tc', 'use_tc']
 
-    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout=DEFAULT_LAYOUT, disable_tc=False):
+    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
+            layout=DEFAULT_LAYOUT, disable_tc=False, use_tc=False):
         super().__init__("conv", name, hint_name, inputs, output_shape, layout)
         self.kernel = kernel
         self.stride = stride
@@ -331,6 +333,7 @@ class Conv(Node):
             self.input_layout = DEFAULT_LAYOUT
         self.output_layout = layout
         self.disable_tc = disable_tc
+        self.use_tc = use_tc
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -359,6 +362,7 @@ class Conv(Node):
             output_shape=config['output_shape'],
             layout=config['layout'],
             disable_tc=config['disable_tc'],
+            use_tc=config['use_tc'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -381,6 +385,7 @@ class Conv(Node):
             'output_shape': self.output_shape,
             'layout': self.layout,
             'disable_tc': self.disable_tc,
+            'use_tc': self.use_tc,
         }
         return config
 
@@ -1135,7 +1140,7 @@ class SplitBatch(Node):
         return 1 + self.input_kernels()
 
     def readable_lines(self, indent) -> List[str]:
-        return [f'[{self.hint_name}]SplitBatch({self.input_readable_str()})[{self.batch_begin}:{self.batch_end}]']
+        return [f'[{self.hint_name}]SplitBatch[{self.layout}]({self.input_readable_str()})[{self.batch_begin}:{self.batch_end}]']
 
 
 class Block:

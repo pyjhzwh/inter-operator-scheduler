@@ -60,7 +60,7 @@ def placeholder(output_shape, layout=DEFAULT_LAYOUT):
 
 
 def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu",
-           is_exit=False, layout=DEFAULT_LAYOUT, disable_tc=False):
+           is_exit=False, layout=DEFAULT_LAYOUT, disable_tc=False, use_tc=False):
     """
     Add a convolution operator to the end of given block.
 
@@ -95,7 +95,10 @@ def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), pad
         A value represents the output of the operator.
     """
     name = new_name()
-    conv = Conv(name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, layout, disable_tc)
+    conv = Conv(
+        name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, layout,
+        disable_tc, use_tc,
+        )
     setup_op(conv, inputs, block, is_exit)
     # conv.infer_shape()
     # for ti, term in enumerate(inputs):

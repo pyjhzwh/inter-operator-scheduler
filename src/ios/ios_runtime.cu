@@ -280,6 +280,76 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     return perf[0].algo;
 }
 
+cudnnConvolutionFwdAlgo_t get_conv_alg_tc(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
+    cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
+    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
+    if(conv_alg_map.count(key))
+        return conv_alg_map.get(key);
+    data_type *input_data, *filter_data, *output_data;
+    int output_h = 1 + (input_h - kernel_h + 2 * padding_h) / stride_h;
+    int output_w = 1 + (input_w - kernel_w + 2 * padding_w) / stride_w;
+    cudnnTensorDescriptor_t inputTensor, outputTensor;
+    cudnnConvolutionDescriptor_t convDesc;
+    cudnnFilterDescriptor_t filterDesc;
+    checkCUDNN(cudnnCreateTensorDescriptor(&inputTensor));
+    checkCUDNN(cudnnCreateFilterDescriptor(&filterDesc));
+    checkCUDNN(cudnnCreateTensorDescriptor(&outputTensor));
+    checkCUDNN(cudnnCreateConvolutionDescriptor(&convDesc));
+    checkCUDNN(cudnnSetTensor4dDescriptor(inputTensor, input_layout, cudnn_data_type, batch_size, in_channels, input_h, input_w));
+    assert(in_channels % groups == 0);
+    checkCUDNN(cudnnSetFilter4dDescriptor(filterDesc, cudnn_data_type, input_layout, out_channels, in_channels / groups, kernel_h, kernel_w));
+    checkCUDNN(cudnnSetConvolution2dDescriptor(convDesc, padding_h, padding_w, stride_h, stride_w, 1/*dilationH*/, 1/*dilationW*/, CUDNN_CROSS_CORRELATION, cudnn_conv_data_type));
+    cudnnMathType_t conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+    checkCUDNN(cudnnSetConvolutionMathType(convDesc, conv_math_type));
+    checkCUDNN(cudnnSetConvolutionGroupCount(convDesc, groups));
+    int n, c, h, w;
+    checkCUDNN(cudnnGetConvolution2dForwardOutputDim(convDesc, inputTensor, filterDesc, &n, &c, &h, &w));
+    assert(n == batch_size);
+    assert(c == out_channels);
+    assert(h == output_h);
+    assert(w == output_w);
+    checkCUDNN(cudnnSetTensor4dDescriptor(outputTensor, output_layout, cudnn_data_type, n, c, h, w));
+
+    size_t input_size = sizeof(data_type) * batch_size * in_channels * input_h * input_w;
+    size_t filter_size = sizeof(data_type) * out_channels * (in_channels / groups)* kernel_h * kernel_w;
+    size_t output_size = sizeof(data_type) * batch_size * out_channels * output_h * output_w;
+    checkCUDA(cudaMalloc(&input_data, input_size));
+    checkCUDA(cudaMalloc(&filter_data, filter_size));
+    checkCUDA(cudaMalloc(&output_data, output_size));
+
+
+    cudnnConvolutionFwdAlgoPerf_t perf[CUDNN_CONVOLUTION_FWD_ALGO_COUNT];
+    int returned;
+
+    checkCUDNN(cudnnFindConvolutionForwardAlgorithmEx(
+            contexts[0].dnn, inputTensor, input_data, filterDesc,
+            filter_data, convDesc, outputTensor, output_data,
+            CUDNN_CONVOLUTION_FWD_ALGO_COUNT, &returned, perf,
+            contexts[0].space, contexts[0].max_size));
+    assert(returned == CUDNN_CONVOLUTION_FWD_ALGO_COUNT);
+    int best_algo=0;
+    for(;best_algo < CUDNN_CONVOLUTION_FWD_ALGO_COUNT; best_algo++)
+    {
+        // https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#tensor-ops-conv-functions-supported-algos
+        // CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM and CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED
+        // can be run as Tensor Core operations
+        if ((best_algo == CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM) || (best_algo == CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED))
+        {
+            conv_alg_map.put(key, perf[best_algo].algo);
+            break;
+        }
+    }
+
+    checkCUDNN(cudnnDestroyTensorDescriptor(inputTensor));
+    checkCUDNN(cudnnDestroyTensorDescriptor(outputTensor));
+    checkCUDNN(cudnnDestroyFilterDescriptor(filterDesc));
+    checkCUDNN(cudnnDestroyConvolutionDescriptor(convDesc));
+    checkCUDA(cudaFree(input_data));
+    checkCUDA(cudaFree(output_data));
+    checkCUDA(cudaFree(filter_data));
+    return perf[best_algo].algo;
+}
+
 struct ConvOP {
     int batch_size;
     int in_channels;
@@ -315,10 +385,11 @@ struct ConvOP {
     data_type *filter_data;
     data_type *bias_data;
 
-    bool disable_tc;
+    bool disable_tc; // disable tensor core
+    bool use_tc; // force to use tensor core
 
     void init(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups, string act,
-        string input_layout, string output_layout, bool disable_tc) {
+        string input_layout, string output_layout, bool disable_tc, bool use_tc) {
         this->batch_size = batch_size;
         this->in_channels = in_channels;
         this->input_h = input_h;
@@ -338,6 +409,8 @@ struct ConvOP {
         this->input_layout = getCudNNLayoutFromStr(input_layout);
         this->output_layout = getCudNNLayoutFromStr(output_layout);
         this->disable_tc = disable_tc;
+        this->use_tc = use_tc;
+        assert(!(disable_tc && use_tc));
     }
     size_t get_filter_size() {
         return sizeof(data_type) * out_channels * (in_channels / groups) * kernel_h * kernel_w;
@@ -391,7 +464,10 @@ struct ConvOP {
         checkCUDA(cudaMalloc(&filter_data, filter_size));
         checkCUDA(cudaMalloc(&bias_data, bias_size));
         checkCUDA(cudaMalloc(&output_data, output_size));
-        this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout, disable_tc);
+        if(use_tc)
+            this->conv_alg = get_conv_alg_tc(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
+        else
+            this->conv_alg = get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout, disable_tc);
     }
     void forward() {
         const float alpha = 1.0f;
@@ -1068,7 +1144,8 @@ struct Conv: NodeBase {
                      conv_config["act"].asString(),
                      input.layout,
                      conv_config["layout"].asString(),
-                     conv_config["disable_tc"].asBool()
+                     conv_config["disable_tc"].asBool(),
+                     conv_config["use_tc"].asBool()
                      );
         this->batch_size = input.batch_size;
         this->out_channels = conv_op.out_channels;
@@ -1149,7 +1226,8 @@ struct Conv_NCHW_NCHW: Transform_Conv {
                      conv_config["act"].asString(),
                      "NCHW",
                      "NCHW",
-                     conv_config["disable_tc"].asBool());
+                     conv_config["disable_tc"].asBool(),
+                     conv_config["use_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1191,7 +1269,8 @@ struct Conv_NCHW_NHWC: Transform_Conv {
                      conv_config["act"].asString(),
                      "NCHW",
                      "NHWC",
-                     conv_config["disable_tc"].asBool());
+                     conv_config["disable_tc"].asBool(),
+                     conv_config["use_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1233,7 +1312,8 @@ struct Conv_NHWC_NCHW: Transform_Conv {
                      conv_config["act"].asString(),
                      "NHWC",
                      "NCHW",
-                     conv_config["disable_tc"].asBool());
+                     conv_config["disable_tc"].asBool(),
+                     conv_config["use_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1275,7 +1355,8 @@ struct Conv_NHWC_NHWC: Transform_Conv {
                      conv_config["act"].asString(),
                      "NHWC",
                      "NHWC",
-                     conv_config["disable_tc"].asBool());
+                     conv_config["disable_tc"].asBool(),
+                     conv_config["use_tc"].asBool());
         int transform_op1_input_stride[4];
         get_stride(
             conv_op.batch_size, conv_op.out_channels, conv_op.output_h, conv_op.output_w,
@@ -1593,7 +1674,7 @@ struct SplitBatch: NodeBase {
         this->batch_end = batch_config["batch_end"].asInt();
         this->context = nullptr;
         this->output_data = nullptr;
-        this->batch_size = batch_end - batch_end;
+        this->batch_size = batch_end - batch_begin;
         this->out_channels = input.out_channels;
         this->output_h = input.output_h;
         this->output_w = input.output_w;
