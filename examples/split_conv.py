@@ -1,4 +1,3 @@
-from termios import VT1
 import numpy as np
 import ios
 from ios import reset_name
@@ -167,7 +166,7 @@ graph2 = split2_network(input_shape, out_channel_list, kernel_size_list)
 
 # optimize execution schedule
 optimized_graph_NCHW = ios.optimize(graph_NCHW, batch_size=1, opt_type='dp_parallel', compute_weight=True)
-optimized_graph_NHWC = ios.optimize(graph_NCHW, batch_size=1, opt_type='dp_parallel', compute_weight=True)
+optimized_graph_NHWC = ios.optimize(graph_NHWC, batch_size=1, opt_type='dp_parallel', compute_weight=True)
 # optimized_graph1 = ios.optimize(graph1, batch_size=1, opt_type='dp_parallel', compute_weight=True)
 # optimized_graph2 = ios.optimize(graph2, batch_size=1, opt_type='dp_parallel', compute_weight=True)
 # stage_list1 = [[([[0], [1]], 'parallel'), ([[2]], 'parallel'), ([[3], [4]], 'parallel'), ([[5]], 'parallel')]]
@@ -182,16 +181,15 @@ optimized_graph2 = ios.graph_schedule_by_stage_list(graph2, stage_list2, compute
 # graph2.sequential_schedule()
 
 # # measure latency
-opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph_NHWC, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
-print(optimized_graph_NHWC)
-print(f'optimized_graph_NHWC schedule: {np.mean(opt_latency):.3f} ms')
-print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
-
 opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph_NCHW, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
 print(optimized_graph_NCHW)
 print(f'optimized_graph_NCHW schedule: {np.mean(opt_latency):.3f} ms')
 print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
 
+opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph_NHWC, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
+print(optimized_graph_NHWC)
+print(f'optimized_graph_NHWC schedule: {np.mean(opt_latency):.3f} ms')
+print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
 
 opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph1, batch_size=1, warmup=warmup, repeat=repeat, profile_stage=True)
 print(optimized_graph1)
