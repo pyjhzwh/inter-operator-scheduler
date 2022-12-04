@@ -1,167 +1,10 @@
 import numpy as np
 import ios
 from ios import reset_name
-
-# def sample_network():
-#     v = ios.placeholder(output_shape=(512, 32, 32), layout="NCHW")
-#     block = ios.Block(enter_node=v.node)
-#     v_split0 = ios.split_batch(block, inputs=[[v]], batch_begin=0, batch_end=1)
-#     v_split1 = ios.split_batch(block, inputs=[[v]], batch_begin=1, batch_end=5)
-#     # v0 = ios.conv2d(block, inputs=[[v_split0]], out_channels=512, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act='relu', layout="NHWC")
-#     # v1 = ios.conv2d(block, inputs=[[v_split1]], out_channels=512, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act='relu', layout="NHWC")
-#     out = ios.identity(block, inputs=[[v_split0], [v_split1]], is_exit=True)  # concat v1, v2, and v3
-#     graph = ios.Graph(name="demo", input=v.node, blocks=[block])
-#     graph.init_weights()
-#     return graph
-
-
-# define computation graph
-# graph = sample_network()
-
-# # optimize execution schedule
-# # optimized_graph = ios.optimize(graph, batch_size=5, opt_type='dp_parallel', compute_weight=True)
-
-# # measure latency
-# graph.sequential_schedule()
-# seq_latency, stage_latency = ios.ios_runtime.graph_latency(graph, batch_size=5, repeat=6, profile_stage=True)
-# print(graph)
-# print(f'Sequential schedule: {np.mean(seq_latency):.3f} ms')
-# print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(6, -1), axis=0)}\n')
-
-
-def sample_network_NCHW(input_shape, out_channel_list, kernel_size_list):
-    reset_name()
-    v = ios.placeholder(output_shape=input_shape, layout="NCHW")
-    block = ios.Block(enter_node=v.node)
-    out_tensor = v
-    for i in range(len(out_channel_list)):
-        is_exit = (i == len(out_channel_list) - 1)
-        out_tensor = ios.conv2d(
-            block,
-            inputs=[[out_tensor]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NCHW",
-            is_exit=is_exit
-        )
-    # v1 = ios.conv2d(block, inputs=[[v]], out_channels=128, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act='relu', layout="NCHW")
-    # v2 = ios.conv2d(block, inputs=[[v1]], out_channels=128, kernel=(1, 1), stride=(1, 1), padding=(1, 1), act='relu', layout="NCHW", is_exit=True)
-    # out = ios.identity(block, inputs=[[v1]], is_exit=True)
-    graph = ios.Graph(name="demo", input=v.node, blocks=[block])
-    graph.init_weights()
-    return graph
-
-
-def sample_network_NHWC(input_shape, out_channel_list, kernel_size_list):
-    reset_name()
-    v = ios.placeholder(output_shape=input_shape, layout="NHWC")
-    block = ios.Block(enter_node=v.node)
-    out_tensor = v
-    for i in range(len(out_channel_list)):
-        is_exit = (i == len(out_channel_list) - 1)
-        out_tensor = ios.conv2d(
-            block,
-            inputs=[[out_tensor]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NHWC",
-            is_exit=is_exit
-        )
-    # v1 = ios.conv2d(block, inputs=[[v]], out_channels=128, kernel=(3, 3), stride=(1, 1), padding=(1, 1), act='relu', layout="NCHW")
-    # v2 = ios.conv2d(block, inputs=[[v1]], out_channels=128, kernel=(1, 1), stride=(1, 1), padding=(1, 1), act='relu', layout="NCHW", is_exit=True)
-    # out = ios.identity(block, inputs=[[v1]], is_exit=True)
-    graph = ios.Graph(name="demo", input=v.node, blocks=[block])
-    graph.init_weights()
-    return graph
-
-def split_network1(input_shape, out_channel_list, kernel_size_list, batch_size):
-    """
-    Split batch into 2 parts, do not specify whether run on tensor core or not
-    """
-    reset_name()
-    v = ios.placeholder(output_shape=input_shape, layout="NCHW")
-    block = ios.Block(enter_node=v.node)
-    v_split0 = ios.split_batch(block, inputs=[[v]], batch_begin=0, batch_end=batch_size//2)
-    v_split1 = ios.split_batch(block, inputs=[[v]], batch_begin=batch_size//2, batch_end=batch_size)
-    # v_split1 = ios.transform(block, inputs=[[v_split1]], dst_layout="NHWC")
-    out_tensor_0 = v_split0
-    out_tensor_1 = v_split1
-    for i in range(len(out_channel_list)):
-        is_exit = (i == len(out_channel_list) - 1)
-        out_tensor_0 = ios.conv2d(
-            block,
-            inputs=[[out_tensor_0]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NCHW",
-        )
-        out_tensor_1 = ios.conv2d(
-            block,
-            inputs=[[out_tensor_1]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NCHW",
-        )
-        
-    out_tensor = ios.identity(block, inputs=[[out_tensor_0], [out_tensor_1]], is_exit=is_exit)
-    graph = ios.Graph(name="demo", input=v.node, blocks=[block])
-    graph.init_weights()
-    return graph
-
-
-def split_network2(input_shape, out_channel_list, kernel_size_list, batch_size):
-    """
-    Split batch into 2 parts, one run on tensor core, another part run on non-tensor core
-    """
-    reset_name()
-    v = ios.placeholder(output_shape=input_shape, layout="NCHW")
-    block = ios.Block(enter_node=v.node)
-    v_non_tc = ios.split_batch(block, inputs=[[v]], batch_begin=0, batch_end=batch_size//2)
-    v_split1 = ios.split_batch(block, inputs=[[v]], batch_begin=batch_size//2, batch_end=batch_size)
-    v_tc = ios.transform(block, inputs=[[v_split1]], dst_layout="NHWC")
-    out_tensor_0 = v_non_tc
-    out_tensor_1 = v_tc
-    for i in range(len(out_channel_list)):
-        is_exit = (i == len(out_channel_list) - 1)
-        out_tensor_0 = ios.conv2d(
-            block,
-            inputs=[[out_tensor_0]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NCHW",
-            disable_tc=True,
-        )
-        out_tensor_1 = ios.conv2d(
-            block,
-            inputs=[[out_tensor_1]],
-            out_channels=out_channel_list[i],
-            kernel=(kernel_size_list[i], kernel_size_list[i]),
-            stride=(1, 1),
-            padding=(1, 1),
-            act='relu',
-            layout="NHWC",
-            use_tc=True,
-        )
-        
-    out_tensor = ios.identity(block, inputs=[[out_tensor_0], [out_tensor_1]], is_exit=is_exit)
-    graph = ios.Graph(name="demo", input=v.node, blocks=[block])
-    graph.init_weights()
-    return graph
+import argparse
+from typing import List
+import ios.models as ios_models
+from ios.models import sample
 
 def gen_stage_list1(num_conv):
     stage_list = []
@@ -183,44 +26,66 @@ def gen_stage_list2(num_conv):
 
     return [stage_list]
 
-warmup=10
-repeat=100
-batch_size=64
+def main(model_name: str, settings: List[str], batch_size:int):
+    warmup=10
+    repeat=100
 
-input_shape = (128, 64, 64)
-out_channel_list = [512, 512, 512]
-kernel_size_list = [3, 1, 1]
-# define computation graph
-graph_NCHW = sample_network_NCHW(input_shape, out_channel_list, kernel_size_list)
-graph_NHWC = sample_network_NHWC(input_shape, out_channel_list, kernel_size_list)
-graph1 = split_network1(input_shape, out_channel_list, kernel_size_list, batch_size)
-graph2 = split_network2(input_shape, out_channel_list, kernel_size_list, batch_size)
+    input_shape = (128, 64, 64)
+    out_channel_list = [512, 512, 512]
+    kernel_size_list = [3, 1, 1]
 
-# optimize execution schedule
-optimized_graph_NCHW = ios.optimize(graph_NCHW, batch_size=batch_size, opt_type='dp_parallel', compute_weight=True)
-optimized_graph_NHWC = ios.optimize(graph_NHWC, batch_size=batch_size, opt_type='dp_parallel', compute_weight=True)
-stage_list1 = gen_stage_list1(len(kernel_size_list))
-optimized_graph1 = ios.graph_schedule_by_stage_list(graph1, stage_list1, compute_weight=True)
-stage_list2 = gen_stage_list2(len(kernel_size_list))
-optimized_graph2 = ios.graph_schedule_by_stage_list(graph2, stage_list2, compute_weight=True)
+    ios_model = getattr(ios_models, model_name)
+    for setting in settings:
+        if "Split" not in setting:
+            model = getattr(ios_model, f"sample_network_{setting}")
+            # define computation graph
+            graph = model(input_shape, out_channel_list, kernel_size_list)
+            # optimize execution schedule
+            optimized_graph = ios.optimize(graph, batch_size=batch_size, opt_type='dp_parallel', compute_weight=True)
+            # measure latency
+            opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
+            # throughput = batch_size * graph.flops() / np.mean(opt_latency) / 1e9
+            print(optimized_graph)
+            # print(f'graph_NCHW throughput: {throughput:.1f} TFLOPS')
+            print(f'graph_{setting} schedule: {np.mean(opt_latency):.3f} ms')
+            print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
+        
+        elif setting == "Split_non_TC" or setting == "Split_TC":
+            model = getattr(ios_model, f"sample_network_{setting}")
+            graph = model(input_shape, out_channel_list, kernel_size_list, batch_size)
+            stage_list1 = gen_stage_list1(len(kernel_size_list))
+            optimized_graph1 = ios.graph_schedule_by_stage_list(graph, stage_list1, compute_weight=True)
+            opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph1, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
+            # throughput = batch_size * optimized_graph1.flops() / np.mean(opt_latency) / 1e9
+            print(optimized_graph1)
+            # print(f'Split-non-TC throughput: {throughput:.1f} TFLOPS')
+            print(f'{setting} schedule: {np.mean(opt_latency):.3f} ms')
+            print(f'        Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}')
 
-# measure latency
-opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph_NCHW, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
-print(optimized_graph_NCHW)
-print(f'optimized_graph_NCHW schedule: {np.mean(opt_latency):.3f} ms')
-print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
+        elif setting == "Split2":
+            model = getattr(ios_model, f"sample_network_{setting}")
+            graph2 = model(input_shape, out_channel_list, kernel_size_list, batch_size)
+            stage_list2 = gen_stage_list2(len(kernel_size_list))
+            optimized_graph2 = ios.graph_schedule_by_stage_list(graph2, stage_list2, compute_weight=True)
+            opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph2, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
+            print(optimized_graph2)
+            # throughput = batch_size * graph2.flops() / np.mean(opt_latency) / 1e9
+            # print(f'Split2 throughput: {throughput:.1f} TFLOPS')
+            print(f'Split2 schedule: {np.mean(opt_latency):.3f} ms')
+            print(f'  Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}')
 
-opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph_NHWC, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
-print(optimized_graph_NHWC)
-print(f'optimized_graph_NHWC schedule: {np.mean(opt_latency):.3f} ms')
-print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}\n')
 
-opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph1, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
-print(optimized_graph1)
-print(f'optimized_graph1 schedule: {np.mean(opt_latency):.3f} ms')
-print(f'     Stage latency1: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}')
-
-opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph2, batch_size=batch_size, warmup=warmup, repeat=repeat, profile_stage=True)
-print(optimized_graph2)
-print(f'optimized_graph2 schedule: {np.mean(opt_latency):.3f} ms')
-print(f'     Stage latency2: {np.mean(np.array(stage_latency).reshape(repeat, -1), axis=0)}')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        'get execution time and throughput of Split batch'
+    )
+    parser.add_argument('-m', '--model', type=str, default="sample",
+                        help="name of model")
+    parser.add_argument('-s', '--setting', type=str, nargs='+', 
+                        default=["NCHW", "NHWC", "non_TC", "TC",
+                        "Split_non_TC", "Split_TC", "Split2"],
+                        help="which setting to test")
+    parser.add_argument('-b', '--batch', type=int, default="2",
+                        help="batch size")
+    args = parser.parse_args()
+    main(args.model, args.setting, args.batch)
