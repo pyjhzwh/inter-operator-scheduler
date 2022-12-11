@@ -42,7 +42,8 @@ cudnnMathType_t cudnn_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
 cudnnMathType_t cudnn_math_type = CUDNN_DEFAULT_MATH;
 #endif
 
-#define CONTEXT_WORKSPACE_SIZE 128 * 1024 * 1024 // 256 MB
+// #define CONTEXT_WORKSPACE_SIZE 128 * 1024 * 1024 // 256 MB
+#define CONTEXT_WORKSPACE_SIZE 512 * 1024 * 1024 // 1G
 #define MAX_NUM_GROUPS 10
 #define MAX_NUM_VALUES 25
 #define MAX_NUM_TERMS 25
@@ -119,10 +120,10 @@ void get_stride(int N, int C, int H, int W, string layout, int* stride)
 
 
 struct ConvKey {
-    int attrs[14];
+    int attrs[16];
     ConvKey() {}
     ConvKey(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
-        cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
+        cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout, bool disable_tc, bool use_tc) {
         attrs[0] = batch_size;
         attrs[1] = in_channels;
         attrs[2] = input_h;
@@ -137,10 +138,12 @@ struct ConvKey {
         attrs[11] = groups;
         attrs[12] = input_layout;
         attrs[13] = output_layout;
+        attrs[14] = (int)use_tc;
+        attrs[15] = (int)disable_tc;
     }
     void print() {
-        fprintf(stderr, "input_shape: %d %d %d %d  out_channels: %d  kernel, stride, padding: %d %d, %d %d, %d %d  groups: %d input_layout: %d, output_layout: %d\n",
-                attrs[0], attrs[1], attrs[2], attrs[3], attrs[4], attrs[5], attrs[6], attrs[7], attrs[8], attrs[9], attrs[10], attrs[11], attrs[12], attrs[13]);
+        fprintf(stderr, "input_shape: %d %d %d %d  out_channels: %d  kernel, stride, padding: %d %d, %d %d, %d %d  groups: %d input_layout: %d output_layout: %d disable_tc: %d use_tc: %d\n",
+                attrs[0], attrs[1], attrs[2], attrs[3], attrs[4], attrs[5], attrs[6], attrs[7], attrs[8], attrs[9], attrs[10], attrs[11], attrs[12], attrs[13], attrs[14], attrs[15]);
     }
 };
 
@@ -189,7 +192,7 @@ struct ConvAlgMap {
         conv2alg[key] = alg;
 
         std::ofstream fout(config_filename, std::ios_base::out | std::ios_base::app);
-        for(int i = 0; i < 14; i++)
+        for(int i = 0; i < 16; i++)
             fout << key.attrs[i] << " ";
         fout << static_cast<int>(alg) << std::endl;
         fout.close();
@@ -221,7 +224,7 @@ CudnnContext contexts[MAX_NUM_GROUPS];
 
 cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
     cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout, bool disable_tc) {
-    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
+    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout, disable_tc, false);
     if(conv_alg_map.count(key))
         return conv_alg_map.get(key);
     data_type *input_data, *filter_data, *output_data;
@@ -268,7 +271,21 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
             CUDNN_CONVOLUTION_FWD_ALGO_COUNT, &returned, perf,
             contexts[0].space, contexts[0].max_size));
     assert(returned == CUDNN_CONVOLUTION_FWD_ALGO_COUNT);
-    conv_alg_map.put(key, perf[0].algo);
+
+    int best_algo = 0;
+    bool found_algo = false;
+    for(;best_algo < CUDNN_CONVOLUTION_FWD_ALGO_COUNT; best_algo++)
+    {
+        // https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#tensor-ops-conv-functions-supported-algos
+        // CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM and CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED
+        // can be run as Tensor Core operations
+        if (perf[best_algo].status == CUDNN_STATUS_SUCCESS)
+        {
+            conv_alg_map.put(key, perf[best_algo].algo);
+            found_algo = true;
+            break;
+        }
+    }
 
     checkCUDNN(cudnnDestroyTensorDescriptor(inputTensor));
     checkCUDNN(cudnnDestroyTensorDescriptor(outputTensor));
@@ -277,12 +294,17 @@ cudnnConvolutionFwdAlgo_t get_conv_alg(int batch_size, int in_channels, int inpu
     checkCUDA(cudaFree(input_data));
     checkCUDA(cudaFree(output_data));
     checkCUDA(cudaFree(filter_data));
-    return perf[0].algo;
+
+    if(! found_algo)
+    {
+        FatalError("None Conv algo works");
+    }
+    return perf[best_algo].algo;
 }
 
 cudnnConvolutionFwdAlgo_t get_conv_alg_tc(int batch_size, int in_channels, int input_h, int input_w, int out_channels, int kernel_h, int kernel_w, int stride_h, int stride_w, int padding_h, int padding_w, int groups,
     cudnnTensorFormat_t input_layout, cudnnTensorFormat_t output_layout) {
-    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout);
+    ConvKey key(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups, input_layout, output_layout, false, true);
     if(conv_alg_map.count(key))
         return conv_alg_map.get(key);
     data_type *input_data, *filter_data, *output_data;
@@ -328,14 +350,17 @@ cudnnConvolutionFwdAlgo_t get_conv_alg_tc(int batch_size, int in_channels, int i
             contexts[0].space, contexts[0].max_size));
     assert(returned == CUDNN_CONVOLUTION_FWD_ALGO_COUNT);
     int best_algo=0;
+    bool found_tc_algo = false;
     for(;best_algo < CUDNN_CONVOLUTION_FWD_ALGO_COUNT; best_algo++)
     {
         // https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#tensor-ops-conv-functions-supported-algos
         // CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM and CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED
         // can be run as Tensor Core operations
-        if ((best_algo == CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM) || (best_algo == CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED))
+        if (((perf[best_algo].algo == CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM) || 
+            (perf[best_algo].algo == CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED)) && perf[best_algo].status == CUDNN_STATUS_SUCCESS)
         {
             conv_alg_map.put(key, perf[best_algo].algo);
+            found_tc_algo = true;
             break;
         }
     }
@@ -347,6 +372,13 @@ cudnnConvolutionFwdAlgo_t get_conv_alg_tc(int batch_size, int in_channels, int i
     checkCUDA(cudaFree(input_data));
     checkCUDA(cudaFree(output_data));
     checkCUDA(cudaFree(filter_data));
+
+    if(!found_tc_algo)
+    {
+        return get_conv_alg(batch_size, in_channels, input_h, input_w, out_channels, kernel_h, kernel_w, stride_h, stride_w, padding_h, padding_w, groups,
+                input_layout, output_layout, false);
+    }
+
     return perf[best_algo].algo;
 }
 
