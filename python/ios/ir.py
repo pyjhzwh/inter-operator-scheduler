@@ -15,6 +15,7 @@ sequence of operators. Other operators are normal operators.
 from typing import List, Iterable, Sequence, Tuple, Dict, Optional
 import numpy as np
 
+DEFAULT_LAYOUT="NCHW"
 
 class Value:
     """
@@ -106,7 +107,7 @@ class Node:
     """
     __slots__ = ['type', 'name', 'hint_name', 'inputs', 'output_shape', 'uses', 'layout']
 
-    def __init__(self, type, name, hint_name, inputs, output_shape, layout="NCHW"):
+    def __init__(self, type, name, hint_name, inputs, output_shape, layout=DEFAULT_LAYOUT):
         self.type = type
         self.name = name
         self.hint_name = hint_name
@@ -144,6 +145,8 @@ class Node:
             return Sequential.from_config(config, name2node)
         elif config['type'] == 'transform':
             return Transform.from_config(config, name2node)
+        elif config['type'] == 'split_batch':
+            return SplitBatch.from_config(config, name2node)
         else:
             raise ValueError(f"unrecognized node type {config['type']}")
 
@@ -250,7 +253,7 @@ class Placeholder(Node):
     """
     The placeholder that represents the input of the computation graph.
     """
-    def __init__(self, name, hint_name, output_shape, layout="NCHW"):
+    def __init__(self, name, hint_name, output_shape, layout=DEFAULT_LAYOUT):
         super().__init__("placeholder", name, hint_name, [[]], output_shape, layout)
 
     @staticmethod
@@ -311,9 +314,11 @@ class Conv(Node):
     act: str, must be one of 'relu', 'sigmoid', 'tanh', 'identity'
         The activation function applied to the output of convolution
     """
-    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'input_layout', 'output_layout']
+    __slots__ = ['out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias',
+        'input_layout', 'output_layout', 'disable_tc', 'use_tc']
 
-    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape, layout="NCHW"):
+    def __init__(self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
+            layout=DEFAULT_LAYOUT, disable_tc=False, use_tc=False):
         super().__init__("conv", name, hint_name, inputs, output_shape, layout)
         self.kernel = kernel
         self.stride = stride
@@ -325,8 +330,10 @@ class Conv(Node):
         if self.inputs and len(self.inputs) > 0:
             self.input_layout = self.inputs[0][0].node.layout
         else:
-            self.input_layout = "NCHW"
+            self.input_layout = DEFAULT_LAYOUT
         self.output_layout = layout
+        self.disable_tc = disable_tc
+        self.use_tc = use_tc
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -354,6 +361,8 @@ class Conv(Node):
             act=config['act'],
             output_shape=config['output_shape'],
             layout=config['layout'],
+            disable_tc=config['disable_tc'],
+            use_tc=config['use_tc'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -375,6 +384,8 @@ class Conv(Node):
             'act': self.act,
             'output_shape': self.output_shape,
             'layout': self.layout,
+            'disable_tc': self.disable_tc,
+            'use_tc': self.use_tc,
         }
         return config
 
@@ -509,12 +520,20 @@ class Pool(Node):
     #
 
     def __init__(self, name, hint_name, inputs, pool_type, kernel, stride, padding, output_shape):
-        super().__init__('pool', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__('pool', name, hint_name, inputs, output_shape, layout)
         self.name = name
         self.pool_type = pool_type
         self.kernel = kernel
         self.stride = stride
         self.padding = padding
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -528,7 +547,6 @@ class Pool(Node):
             stride=config['stride'],
             padding=config['padding'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -604,8 +622,17 @@ class Element(Node):
     __slots__ = ['op_type']
 
     def __init__(self, name, hint_name, inputs, op_type, output_shape):
-        super().__init__("element", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("element", name, hint_name, inputs, output_shape, layout)
         self.op_type: str = op_type
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
+
 
     @staticmethod
     def from_config(config, name2node):
@@ -616,7 +643,6 @@ class Element(Node):
                     for term_config in config['inputs']],
             op_type=config['op_type'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -663,7 +689,15 @@ class Identity(Node):
     Identity operator. It can also works as the Concat operator when there are multiple terms in the inputs.
     """
     def __init__(self, name, hint_name, inputs, output_shape):
-        super().__init__("identity", name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("identity", name, hint_name, inputs, output_shape, layout)
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -673,7 +707,6 @@ class Identity(Node):
             inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
                     config['inputs']],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -727,9 +760,17 @@ class Activation(Node):
     __slots__ = ['act_type', 'inplace']
 
     def __init__(self, name, hint_name, inputs, act_type, inplace, output_shape):
-        super().__init__('activation', name, hint_name, inputs, output_shape, inputs[0][0].node.layout)
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__('activation', name, hint_name, inputs, output_shape, layout)
         self.act_type = act_type
         self.inplace = inplace
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
 
     @staticmethod
     def from_config(config, name2node):
@@ -741,7 +782,6 @@ class Activation(Node):
             act_type=config['act_type'],
             inplace=config['inplace'],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -840,9 +880,18 @@ class Transform(Node):
         self, name, hint_name, inputs, dst_layout, output_shape
     ):
         super().__init__("transform", name, hint_name, inputs, output_shape, dst_layout)
-        # print("inputs", inputs)
-        self.src_layout = inputs[0][0].node.layout
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        self.src_layout = layout
         self.dst_layout = dst_layout
+
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.src_layout = self.inputs[0][0].node.layout
+
     
     @staticmethod
     def from_config(config, name2node):
@@ -854,7 +903,6 @@ class Transform(Node):
             # src_layout=config["src_layout"],
             dst_layout=config["dst_layout"],
             output_shape=config['output_shape'],
-            layout=config['layout'],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -871,7 +919,6 @@ class Transform(Node):
             'src_layout': self.src_layout,
             'dst_layout': self.dst_layout,
             'output_shape': self.output_shape,
-            'layout': self.layout,
         }
         return config
 
@@ -901,12 +948,12 @@ class Transform_Conv(Node):
     """
     __slots__ = [
         'out_channels', 'kernel', 'stride', 'padding', 'groups', 'act', 'weight', 'bias', 'conv_in_layout', 'conv_out_layout',
-        'transform_src_layout', 'transform_dst_layout'
+        'transform_src_layout', 'transform_dst_layout', 'disable_tc'
     ]
 
     def __init__(
         self, name, hint_name, inputs, out_channels, kernel, stride, padding, groups, act, output_shape,
-        conv_in_layout="NCHW", conv_out_layout="NCHW",
+        conv_in_layout=DEFAULT_LAYOUT, conv_out_layout=DEFAULT_LAYOUT, disable_tc=False,
     ):
         super().__init__(f"transform_conv_{conv_in_layout}_{conv_out_layout}",
             name, hint_name, inputs, output_shape, conv_out_layout)
@@ -925,6 +972,7 @@ class Transform_Conv(Node):
         assert act in ['relu', 'sigmoid', 'tanh', 'identity']
         self.conv_in_layout = conv_in_layout
         self.conv_out_layout = conv_out_layout
+        self.disable_tc = disable_tc
 
         #
         # Both weight and bias are instances of numpy.ndarray. It can be None when the computation graph is used to
@@ -960,6 +1008,7 @@ class Transform_Conv(Node):
             output_shape=config['output_shape'],
             conv_in_layout=config['conv_in_layout'],
             conv_out_layout=config["conv_out_layout"],
+            disable_tc=config["disable_tc"],
         )
         for ti, term in enumerate(node.inputs):
             for vi, value in enumerate(term):
@@ -982,6 +1031,7 @@ class Transform_Conv(Node):
             'output_shape': self.output_shape,
             'conv_in_layout': self.conv_in_layout,
             'conv_out_layout': self.conv_out_layout,
+            'disable_tc': self.disable_tc,
         }
         return config
 
@@ -1022,6 +1072,75 @@ class Transform_Conv(Node):
 
     def readable_lines(self, indent) -> List[str]:
         return [f'[{self.hint_name}]Transform_Conv2d({self.input_readable_str()})[Transform:{self.transform_src_layout}->{self.transform_dst_layout}, Conv:{self.conv_in_layout}->{self.conv_out_layout}]']
+
+
+class SplitBatch(Node):
+    """
+    Split the input node by (batch_begin:batch_end) in batch dimension
+    """
+    def __init__(
+        self, name, hint_name, inputs, output_shape, batch_begin, batch_end
+    ):
+        if inputs and len(inputs) > 0:
+            layout = inputs[0][0].node.layout
+        else:
+            layout = DEFAULT_LAYOUT
+        super().__init__("split_batch", name, hint_name, inputs, output_shape, layout)
+        self.batch_begin = batch_begin
+        self.batch_end = batch_end
+
+    def update_input_layout(self):
+        if len(self.inputs) > 0:
+            self.layout = self.inputs[0][0].node.layout
+
+    @staticmethod
+    def from_config(config, name2node):
+        node = SplitBatch(
+            name=config['name'],
+            hint_name=config['hint_name'],
+            inputs=[[Value.from_config(value_config, name2node) for value_config in term_config] for term_config in
+                    config['inputs']],
+            output_shape=config['output_shape'],
+            batch_begin=config['batch_begin'],
+            batch_end=config['batch_end'],
+        )
+        for ti, term in enumerate(node.inputs):
+            for vi, value in enumerate(term):
+                name2node[value.node.name].uses.append((node, ti, vi))
+        return node
+
+    def export_config(self):
+        config = {
+            'type': 'split_batch',
+            'name': self.name,
+            'hint_name': self.hint_name,
+            'inputs': None if self.inputs is None else [[value.export_config() for value in term] for term in
+                                                        self.inputs],
+            'output_shape': self.output_shape,
+            'layout': self.layout,
+            'batch_begin': self.batch_begin,
+            'batch_end': self.batch_end,
+        }
+        return config
+
+    @property
+    def input_shape(self):
+        return (sum(term[0].length for term in self.inputs), *self.inputs[0][0].node.output_shape[1:])
+
+    def infer_shape(self):
+        self.output_shape = self.input_shape
+
+    def flops(self):
+        return self.input_flops()
+
+    def memory_access(self):
+        return self.input_memory_access()
+
+    def kernels(self):
+        return 1 + self.input_kernels()
+
+    def readable_lines(self, indent) -> List[str]:
+        return [f'[{self.hint_name}]SplitBatch[{self.layout}]({self.input_readable_str()})[{self.batch_begin}:{self.batch_end}]']
 
 
 class Block:

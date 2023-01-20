@@ -206,6 +206,29 @@ def optimize(graph: Graph,
     return new_graph
 
 
+def graph_schedule_by_stage_list(
+    graph: Graph,
+    stage_list: List,
+    compute_weight=False) -> Graph:
+
+    graph_enter = Placeholder(graph.input.name, graph.input.hint_name, graph.input.output_shape, graph.input.layout)
+    graph_enter.output_shape = graph.enter_node.output_shape
+    blocks = []
+
+    for block, stage in zip(graph.blocks, stage_list):
+        all_nodes = block.inner_nodes + [block.exit_node]
+
+        nid: Dict[Node, int] = {node: i for i, node in enumerate(all_nodes)}
+        idn: Dict[int, Node] = {i: node for i, node in enumerate(all_nodes)}
+
+        new_block = construct(stage, block, blocks, graph_enter, idn, nid, compute_weight)
+        blocks.append(new_block)
+
+    new_graph = Graph(graph.name, graph_enter, blocks)
+    new_graph.infer_shape()
+    return new_graph
+
+
 def count_bits(s):
     """
     Count the number of bit 1 in the binary representation of non-negative number s
@@ -878,14 +901,15 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                 # NCHW_NCHW will use the normal Conv rather than Transform_Conv
                 if input_layout == "NCHW" and output_layout == "NCHW":
                     new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
-                                    padding, groups, snodes[0].act, None, layout=output_layout)
+                                    padding, groups, snodes[0].act, None, layout=output_layout, disable_tc=snodes[0].disable_tc)
                 else:
                     new_node = Transform_Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
-                                    padding, groups, snodes[0].act, None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                                    padding, groups, snodes[0].act, None, conv_in_layout=input_layout, conv_out_layout=output_layout,
+                                    disable_tc=snodes[0].disable_tc)
                     new_node.update_transform_src_layout()
             else:
                 new_node = Conv(snodes[0].name, " ".join(nd.hint_name for nd in snodes), None, out_channels, kernel, stride,
-                                padding, groups, snodes[0].act, None)
+                                padding, groups, snodes[0].act, None, snodes[0].layout, snodes[0].disable_tc)
             new_node.inputs = get_new_terms(terms, new_node)
             new_node.infer_shape()
             if compute_weight:
@@ -943,11 +967,12 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                         new_node_name = nd.name
                         # NCHW_NCHW will use the normal Conv rather than Transform_Conv
                         if input_layout == "NCHW" and output_layout == "NCHW":
-                            new_node = Conv(nd.name, nd.hint_name, terms, out_channels, kernel, stride,
-                                padding, groups, act, None, layout=output_layout)
+                            new_node = Conv(new_node_name, nd.hint_name, terms, out_channels, kernel, stride,
+                                padding, groups, act, None, layout=output_layout, disable_tc=snodes[0].disable_tc)
                         else:
                             new_node = Transform_Conv(nd.name, nd.hint_name, inputs=terms, out_channels=out_channels, kernel=kernel, stride=stride, padding=padding,
-                                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout)
+                                            groups=groups, act=act, output_shape=None, conv_in_layout=input_layout, conv_out_layout=output_layout,
+                                            disable_tc=snodes[0].disable_tc)
                         new_node.inputs = merge_inputs(get_new_terms(nd.inputs, new_node, do_sort=False))
                         if compute_weight:
                             copy_weights(new_node, nd)
@@ -975,7 +1000,8 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                             snode_config["inputs"] = []
                             new_node = Node.from_config(snode_config, {})
                             new_node.inputs = merge_inputs(get_new_terms(snode.inputs, new_node, do_sort=False))
-                            if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                            # if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                            if hasattr(new_node, "update_input_layout"):
                                 new_node.update_input_layout()
                             if compute_weight:
                                 copy_weights(new_node, snode)
@@ -1010,7 +1036,8 @@ def construct(stage_list: List[Tuple[List[List[int]], str]], block, constructed_
                         snode_config["inputs"] = []
                         new_node = Node.from_config(snode_config, {})
                         new_node.inputs = merge_inputs(get_new_terms(snode.inputs, new_node, do_sort=False))
-                        if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                        # if isinstance(new_node, Conv) or isinstance(new_node, Transform_Conv):
+                        if hasattr(new_node, "update_input_layout"):
                             new_node.update_input_layout()
                         if compute_weight:
                             copy_weights(new_node, snode)

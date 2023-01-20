@@ -4,7 +4,9 @@ Utilities used to construct computation graph.
 Please refer the definition of inception v3, nasnet, randwire, and squeezenet for the definition of network.
 """
 from typing import Tuple, List
-from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph, Transform_Conv
+from ios.ir import Placeholder, Conv, Pool, Relu, Identity, Transform, Value, Node, Block, Sequential, Activation, Element, Graph, Transform_Conv, SplitBatch
+from ios.ir import DEFAULT_LAYOUT
+
 
 name_index = 0
 
@@ -43,7 +45,7 @@ def setup_op(op: Node, inputs: List[List[Value]], block: Block, is_exit=False):
         block.inner_nodes.append(op)
 
 
-def placeholder(output_shape, layout="NCHW"):
+def placeholder(output_shape, layout=DEFAULT_LAYOUT):
     """
     Placeholder.
 
@@ -58,7 +60,7 @@ def placeholder(output_shape, layout="NCHW"):
 
 
 def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu",
-           is_exit=False, layout="NCHW"):
+           is_exit=False, layout=DEFAULT_LAYOUT, disable_tc=False, use_tc=False):
     """
     Add a convolution operator to the end of given block.
 
@@ -93,7 +95,10 @@ def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), pad
         A value represents the output of the operator.
     """
     name = new_name()
-    conv = Conv(name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, layout)
+    conv = Conv(
+        name, name, inputs, out_channels, kernel, stride, padding, groups, act, None, layout,
+        disable_tc, use_tc,
+        )
     setup_op(conv, inputs, block, is_exit)
     # conv.infer_shape()
     # for ti, term in enumerate(inputs):
@@ -106,7 +111,7 @@ def conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), pad
     return Value(conv, 0, out_channels)
 
 
-def rwconv2d(block: Block, inputs, out_channels, stride=(1, 1), is_exit=False, layout="NCHW"):
+def rwconv2d(block: Block, inputs, out_channels, stride=(1, 1), is_exit=False, layout=DEFAULT_LAYOUT):
     """
     Add a Randwire operator at the end of given block. It consists of a Relu activation and a Separate convolution. The
     kernel size of the separate convolution is 3x3 and the padding is 1x1.
@@ -384,7 +389,7 @@ def sequential(block: Block, hint_name, nodes: List[Node], is_exit=False):
     return Value(seq, 0, seq.output_shape[0])
 
 
-def sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel, stride, padding, is_exit=False, layout="NCHW"):
+def sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel, stride, padding, is_exit=False, layout=DEFAULT_LAYOUT):
     """
     Add a separate convolution at the end of given block. This operator is a compound operator consists of a depth-wise
     convolution and a point-wise convolution.
@@ -425,7 +430,7 @@ def sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel, stri
     return sequential(block, hint_name='SepConv', nodes=nodes, is_exit=is_exit)
 
 
-def relu_sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel, stride, padding, is_exit=False, layout="NCHW"):
+def relu_sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel, stride, padding, is_exit=False, layout=DEFAULT_LAYOUT):
     """
     Add a compound operator that contains Relu operator and Separate operator at the end of given block.
 
@@ -467,7 +472,7 @@ def relu_sep_conv(block: Block, inputs: List[List[Value]], out_channels, kernel,
 
 
 def relu_conv(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1,
-              is_exit=False, layout="NCHW"):
+              is_exit=False, layout=DEFAULT_LAYOUT):
     """
     Add a compound operator that contains a Relu operator and a convolution operator at the end of given block.
 
@@ -553,7 +558,7 @@ def transform(block: Block, inputs, dst_layout, is_exit=False):
 
 
 def transform_conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(1, 1), padding=(0, 0), groups=1, act="relu",
-           conv_in_layout="NCHW", conv_out_layout="NCHW", is_exit=False):
+           conv_in_layout=DEFAULT_LAYOUT, conv_out_layout=DEFAULT_LAYOUT, is_exit=False):
     """
     Add a convolution operator to the end of given block.
 
@@ -582,10 +587,10 @@ def transform_conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(
         The activation applied to the output of convolution.
 
     :param conv_in_layout: str
-        Input layout of convolution: "NCHW" or "NHWC"
+        Input layout of convolution: DEFAULT_LAYOUT or "NHWC"
     
     :param conv_out_layout: str
-        Output layout of convolution: "NCHW" or "NHWC"
+        Output layout of convolution: DEFAULT_LAYOUT or "NHWC"
 
     :param is_exit: boolean, default False
         Whether this operator is the exit operator of the block.
@@ -607,3 +612,15 @@ def transform_conv2d(block: Block, inputs, out_channels, kernel=(1, 1), stride=(
     # else:
     #     block.inner_nodes.append(conv)
     return Value(conv, 0, out_channels)
+
+
+def split_batch(block: Block, inputs, batch_begin, batch_end, is_exit=False):
+    """
+    Split the input in batch dimension
+    """
+    name = new_name()
+    split_batch = SplitBatch(
+        name, name, inputs, None, batch_begin, batch_end
+    )
+    setup_op(split_batch, inputs, block, is_exit)
+    return Value(split_batch, 0, split_batch.output_shape[0])

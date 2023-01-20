@@ -1,6 +1,5 @@
 import argparse
 import ios
-import parser
 import numpy as np
 from ios.models.common import *
 from ios.optimizer import *
