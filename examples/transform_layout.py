@@ -28,7 +28,6 @@ def create_transform_graph_given_layout(transform_param: list, input_layout: str
 
 def transform_latency(transform_param: list):
     layouts = [["NCHW", "NHWC"], ["NHWC", "NCHW"]]
-    # print(transform_param)
     latencies = []
     for input_layout, output_layout in layouts:
         graph = create_transform_graph_given_layout(transform_param, input_layout, output_layout)

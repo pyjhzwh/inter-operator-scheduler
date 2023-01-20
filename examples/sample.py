@@ -1,6 +1,6 @@
 import numpy as np
 import ios
-
+import os
 
 def sample_network():
     v = ios.placeholder(output_shape=(375, 15, 15))
@@ -19,19 +19,22 @@ def sample_network():
 graph = sample_network()
 
 # optimize execution schedule
-optimized_graph = ios.optimize(graph, batch_size=1, opt_type='dp_parallel', compute_weight=True)
+optimized_graph = ios.optimize(graph, batch_size=1, opt_type='dp_merge_parallel_transform', compute_weight=True)
 
 # measure latency
-graph.sequential_schedule()
-seq_latency, stage_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, repeat=6, profile_stage=True)
-print(graph)
-print(f'Sequential schedule: {np.mean(seq_latency):.3f} ms')
-print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(6, -1), axis=0)}\n')
+# graph.sequential_schedule()
+# seq_latency, stage_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, repeat=6, profile_stage=True)
+# print(graph)
+# print(f'Sequential schedule: {np.mean(seq_latency):.3f} ms')
+# print(f'      Stage latency: {np.mean(np.array(stage_latency).reshape(6, -1), axis=0)}\n')
+
 
 opt_latency, stage_latency = ios.ios_runtime.graph_latency(optimized_graph, batch_size=1, repeat=6, profile_stage=True)
 print(optimized_graph)
 print(f'Optimized schedule: {np.mean(opt_latency):.3f} ms')
 print(f'     Stage latency: {np.mean(np.array(stage_latency).reshape(6, -1), axis=0)}')
+os.makedirs("./outputs/", exist_ok=True)
+ios.draw(optimized_graph, fname=f'./outputs/optimized_{graph.name}.png', label=f'Optimized Graph, Latency = {np.mean(opt_latency):.3f}')
 
 # inference on ios runtime
 dummy_inputs = np.random.randn(1, 375, 15, 15)

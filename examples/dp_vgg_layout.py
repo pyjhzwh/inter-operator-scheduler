@@ -1,6 +1,6 @@
 import ios
 import numpy as np
-from ios.utils import get_conv_key, conv_latency, get_transform_key, transform_latency
+from ios.utils import get_conv_key, conv_latency, get_transform_key, transform_latency, create_conv_graph_given_layout
 import argparse
 import parser
 
@@ -77,28 +77,53 @@ def create_vgg_given_layout(model_name:str, best_layout):
     layout = [id2layout[l] for l in best_layout]
     return ios.models.vgg_net_opt_layout(cfgs[model2char[model_name]], layout, model_name)
 
+def NCHW_NCHW_conv_latency(conv_param):
+    graph = create_conv_graph_given_layout(conv_param, "NCHW", "NCHW")
+
+    graph.sequential_schedule()
+    seq_latency = ios.ios_runtime.graph_latency(graph, batch_size=1, warmup=3, repeat=10)
+    return np.mean(seq_latency)
+
+
+def get_conv_latency_from_graph(graph: ios.Graph):
+    conv_latencies = []
+    conv_nodes = []
+    for block in graph.blocks:
+        for node in block.inner_nodes + [block.exit_node]:
+            if isinstance(node, ios.ir.Conv) and node.groups == 1:
+                conv_nodes.append(node)
+
+    for node in conv_nodes:
+        conv_key = get_conv_key(node)
+        c_latency = NCHW_NCHW_conv_latency(conv_key)
+
+        conv_latencies.append(c_latency)
+
+    return conv_latencies
 
 def main(model_name: str):
-    graph0 = getattr(ios.models, model_name)()
+    # graph0 = getattr(ios.models, model_name)()
+    graph0 = create_vgg_given_layout(model_name, [0]*8)
+    print(get_conv_latency_from_graph(graph0))
 
-    conv_latencies, transform_latencies = get_convandtransform_latency_from_graph(graph0)
-    best_layouts = dp_best_layout(conv_latencies, transform_latencies)
-    graph1 = create_vgg_given_layout(model_name, best_layouts)
+    # conv_latencies, transform_latencies = get_convandtransform_latency_from_graph(graph0)
+    # best_layouts = dp_best_layout(conv_latencies, transform_latencies)
+    # graph1 = create_vgg_given_layout(model_name, best_layouts)
 
     graph0.sequential_schedule()
-    # print(graph0)
-    latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, warmup=10, repeat=10, profile_stage=True)
+    print(graph0)
+    latency0, stage_latency0 = ios.ios_runtime.graph_latency(graph0, batch_size=1, warmup=3, repeat=10, profile_stage=True)
 
     print(f'original {model_name} Sequential schedule: {np.mean(latency0):.3f} ms')
     print(f'original {model_name} Stage latency: {np.mean(np.array(stage_latency0).reshape(10, -1), axis=0)}\n')
 
-    graph1.sequential_schedule()
-    print(graph1)
-    latency1, stage_latency1 = ios.ios_runtime.graph_latency(graph1, batch_size=1, warmup=10, repeat=10, profile_stage=True)
+    # graph1.sequential_schedule()
+    # print(graph1)
+    # latency1, stage_latency1 = ios.ios_runtime.graph_latency(graph1, batch_size=1, warmup=10, repeat=10, profile_stage=True)
 
 
-    print(f'opt {model_name} Sequential schedule: {np.mean(latency1):.3f} ms')
-    print(f'opt {model_name} Stage latency: {np.mean(np.array(stage_latency1).reshape(10, -1), axis=0)}\n')
+    # print(f'opt {model_name} Sequential schedule: {np.mean(latency1):.3f} ms')
+    # print(f'opt {model_name} Stage latency: {np.mean(np.array(stage_latency1).reshape(10, -1), axis=0)}\n')
 
 
 if __name__ == '__main__':
